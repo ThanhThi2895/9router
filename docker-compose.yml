@@ -19,13 +19,9 @@ services:
       PORT: "20128"
       HOSTNAME: "0.0.0.0"
       NODE_ENV: production
-      HEADROOM_URL: http://headroom:8787
-    depends_on:
-      - headroom
 
-  headroom:
-    image: ghcr.io/chopratejas/headroom:latest
-    container_name: headroom
-    restart: always
-    ports:
-      - "8787:8787"
+  # The upstream compose file also ran a `headroom` sidecar for prompt
+  # compression. Its image (ghcr.io/chopratejas/headroom) is not publicly
+  # pullable, which fails the whole `compose up`. It is an optional token saver:
+  # without it chatCore just logs "HEADROOM skipped" and serves the request
+  # normally. Add the service back, plus HEADROOM_URL, if you gain access to it.
