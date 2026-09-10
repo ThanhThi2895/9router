@@ -1,6 +1,8 @@
 services:
   9router:
-    image: decolua/9router:latest
+    # Built from this repo, not the published image: the Gemini-native endpoint
+    # here carries fixes that decolua/9router:latest does not have.
+    build: .
     container_name: 9router
     restart: always
     ports:
