@@ -8,7 +8,10 @@ services:
     ports:
       - "20128:20128"
     volumes:
-      - 9router-data:/app/data
+      # Bind mount, not a named volume: this is the path the pre-compose
+      # `docker run` deployment used, so an existing install keeps its accounts,
+      # API keys and usage history instead of coming up empty.
+      - ${HOME}/.9router:/app/data
     env_file:
       - .env
     environment:
@@ -26,7 +29,3 @@ services:
     restart: always
     ports:
       - "8787:8787"
-
-volumes:
-  9router-data:
-    name: 9router-data
