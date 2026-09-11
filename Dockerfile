@@ -1,16 +1,23 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-alpine
+# Mirrors default to the CN endpoints this image has always used. Builders outside
+# CN (GitHub Actions) override them with the upstream hosts via --build-arg.
+ARG APK_MIRROR=mirrors.aliyun.com
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
-# CN mirror for apk (used by builder and runner stages)
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
+ARG APK_MIRROR
+# apk mirror for the base and builder stages
+RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories
 
 FROM base AS builder
+ARG NPM_REGISTRY
 
 RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
 
 COPY package.json ./
-RUN npm install --registry=https://registry.npmmirror.com
+RUN npm install --registry=${NPM_REGISTRY}
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
