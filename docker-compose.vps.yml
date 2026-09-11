@@ -1,0 +1,24 @@
+# VPS deployment template. Copy this file to the server as
+# $VPS_APP_DIR/docker-compose.yml (that is the path `deploy-vps.yml` drives),
+# put the runtime `.env` next to it, then trigger the "Deploy to VPS" workflow.
+#
+# Unlike the repo's docker-compose.yml, which builds the image locally, this one
+# pulls the image the deploy workflow pushed to GHCR.
+services:
+  9router:
+    image: ghcr.io/thanhthi2895/9router:vps
+    container_name: 9router
+    restart: always
+    ports:
+      - "20128:20128"
+    volumes:
+      # Bind mount, not a named volume: accounts, API keys, the SQLite database
+      # and usage history all live here and must survive an image replacement.
+      - ${HOME}/.9router:/app/data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      PORT: "20128"
+      HOSTNAME: "0.0.0.0"
+      NODE_ENV: production

@@ -130,3 +130,61 @@ git tag v0.4.x && git push origin v0.4.x
 ```
 
 Workflow: `app/.github/workflows/docker-publish.yml`
+
+## Deploy to a private VPS
+
+`.github/workflows/deploy-vps.yml` builds an `amd64` image, pushes it to GHCR as
+`ghcr.io/thanhthi2895/9router:vps`, then restarts the stack on the VPS over SSH.
+It is **manual only** — run it from the Actions tab (`Deploy to VPS` →
+`Run workflow`). The public `decolua/9router` release flow stays on
+`docker-publish.yml` and its `v*` tags.
+
+One-time setup on the VPS:
+
+```bash
+mkdir -p /opt/9router && cd /opt/9router
+# copy docker-compose.vps.yml from this repo as docker-compose.yml
+# create .env next to it (see .env.example for the full contract)
+docker compose up -d
+```
+
+One-time setup in GitHub — repository **secrets**:
+
+| Secret | Purpose |
+|---|---|
+| `SSH_HOST` | VPS hostname or IP |
+| `SSH_USERNAME` | SSH user |
+| `SSH_PRIVATE_KEY` | Private key for that user |
+| `SSH_PORT` | Optional, defaults to `22` |
+| `DISCORD_WEBHOOK_URL` | Success/failure notifications |
+
+and one repository **variable**:
+
+| Variable | Purpose |
+|---|---|
+| `VPS_APP_DIR` | Directory holding `docker-compose.yml` and `.env`, e.g. `/opt/9router` |
+
+The `deploy` job targets the `production` environment, so adding a required
+reviewer there gates every deploy behind an approval.
+
+### Data safety
+
+The container is replaced on every deploy, but `$HOME/.9router` on the host is
+bind-mounted and untouched — accounts, API keys, the SQLite database and usage
+history survive. The workflow runs no database migration and takes no backup of
+its own; the app's automatic backups under `$DATA_DIR/db/backups/` are the only
+rollback material.
+
+### Build mirrors
+
+The `Dockerfile` defaults to CN mirrors (`mirrors.aliyun.com`,
+`registry.npmmirror.com`). The deploy workflow overrides both with the upstream
+hosts through `APK_MIRROR` / `NPM_REGISTRY` build args, since GitHub runners are
+not in CN. Override them the same way for any build outside CN:
+
+```bash
+docker build \
+  --build-arg APK_MIRROR=dl-cdn.alpinelinux.org \
+  --build-arg NPM_REGISTRY=https://registry.npmjs.org \
+  -t 9router .
+```
