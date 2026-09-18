@@ -341,6 +341,13 @@ function ensureArrayItems(obj) {
   for (const v of Object.values(obj)) if (v && typeof v === "object") ensureArrayItems(v);
 }
 
+// A Gemini function declaration carries its argument schema in either `parameters`
+// (legacy) or `parametersJsonSchema` (current SDKs, e.g. the Antigravity CLI).
+// Exactly one of the two is ever present, so read both before falling back.
+export function functionDeclarationSchema(fn) {
+  return fn?.parametersJsonSchema || fn?.parameters;
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 export function cleanJSONSchemaForAntigravity(schema) {
   if (!schema || typeof schema !== "object") return schema;

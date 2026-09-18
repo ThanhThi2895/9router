@@ -5,7 +5,7 @@ import { OAUTH_ENDPOINTS, ANTIGRAVITY_HEADERS, AG_DEFAULT_TOOLS, AG_TOOL_SUFFIX,
 import { HTTP_STATUS } from "../config/runtimeConfig.js";
 import { resolveSessionId, toNumericSessionId } from "../utils/sessionManager.js";
 import { proxyAwareFetch } from "../utils/proxyFetch.js";
-import { cleanJSONSchemaForAntigravity, normalizeGeminiContents } from "../translator/formats/gemini.js";
+import { cleanJSONSchemaForAntigravity, normalizeGeminiContents, functionDeclarationSchema } from "../translator/formats/gemini.js";
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
 
@@ -246,11 +246,14 @@ export class AntigravityExecutor extends BaseExecutor {
           const name = sanitizeFunctionName(fn.name);
           if (seenToolNames.has(name)) continue;
           seenToolNames.add(name);
+          const schema = functionDeclarationSchema(fn);
+          // `parameters` and `parametersJsonSchema` are mutually exclusive upstream
+          const { parametersJsonSchema: _schemaAlias, ...declaration } = fn;
           allDeclarations.push({
-            ...fn,
+            ...declaration,
             name,
-            parameters: fn.parameters
-              ? cleanJSONSchemaForAntigravity(structuredClone(fn.parameters))
+            parameters: schema
+              ? cleanJSONSchemaForAntigravity(structuredClone(schema))
               : { type: "object", properties: { reason: { type: "string", description: "Brief explanation" } }, required: ["reason"] }
           });
         }

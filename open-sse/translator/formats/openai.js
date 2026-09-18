@@ -1,5 +1,6 @@
 // OpenAI helper functions for translator
 import { ROLE, OPENAI_BLOCK, CLAUDE_BLOCK, VALID_OPENAI_CONTENT_TYPES, VALID_OPENAI_MESSAGE_TYPES } from "../schema/index.js";
+import { functionDeclarationSchema } from "./gemini.js";
 
 // Re-export valid-type lists (moved to schema/blocks.js) to keep existing importers working.
 export { VALID_OPENAI_CONTENT_TYPES, VALID_OPENAI_MESSAGE_TYPES };
@@ -107,7 +108,7 @@ export function filterToOpenAIFormat(body, opts = {}) {
           function: {
             name: fn.name,
             description: String(fn.description || ""),
-            parameters: fn.parameters || { type: "object", properties: {} }
+            parameters: functionDeclarationSchema(fn) || { type: "object", properties: {} }
           }
         }));
       }

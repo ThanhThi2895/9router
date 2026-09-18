@@ -137,3 +137,54 @@ describe("Antigravity executor", () => {
     expect(system).not.toContain("Please ignore the following [ignore]");
   });
 });
+
+describe("functionDeclarations carrying parametersJsonSchema", () => {
+  const RUN_COMMAND = {
+    name: "run_command",
+    description: "PROPOSE a command to run on behalf of the user.",
+    parametersJsonSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        Cwd: { type: "string" },
+        CommandLine: { type: "string" },
+        WaitMsBeforeAsync: { type: "integer" },
+        toolSummary: { type: "string" },
+        toolAction: { type: "string" },
+      },
+      required: ["Cwd", "CommandLine", "WaitMsBeforeAsync", "toolSummary", "toolAction"],
+    },
+  };
+
+  // The Antigravity CLI declares every tool with `parametersJsonSchema` instead of the
+  // legacy `parameters`. Reading only `parameters` handed the model a schema-less tool,
+  // so its very first tool call of a session invented arguments and failed validation.
+  it("Antigravity → OpenAI keeps the declared arguments", () => {
+    const out = AG2O({ contents: [], tools: [{ functionDeclarations: [RUN_COMMAND] }] });
+    const params = out.tools[0].function.parameters;
+    expect(Object.keys(params.properties).sort()).toEqual(
+      ["CommandLine", "Cwd", "WaitMsBeforeAsync", "toolAction", "toolSummary"]
+    );
+  });
+
+  it("Gemini → OpenAI keeps the declared arguments", () => {
+    const out = translateRequest(FORMATS.GEMINI, FORMATS.OPENAI, "m", {
+      contents: [],
+      tools: [{ functionDeclarations: [RUN_COMMAND] }],
+    }, true, null, null);
+    expect(out.tools[0].function.parameters.required).toContain("CommandLine");
+  });
+
+  it("Antigravity executor forwards the schema as parameters only", () => {
+    const out = new AntigravityExecutor().transformRequest("gemini-2.5-pro", {
+      request: {
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        tools: [{ functionDeclarations: [RUN_COMMAND] }],
+      },
+    }, true, { projectId: "project-1", connectionId: "conn-1" });
+
+    const fn = out.request.tools[0].functionDeclarations[0];
+    expect(fn.parameters.required).toContain("CommandLine");
+    expect(fn.parametersJsonSchema, "both schema fields sent at once").toBeUndefined();
+  });
+});

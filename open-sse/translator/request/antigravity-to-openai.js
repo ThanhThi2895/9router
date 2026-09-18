@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { encodeDataUri } from "../concerns/image.js";
 import { ROLE, GEMINI_ROLE, OPENAI_BLOCK } from "../schema/index.js";
+import { functionDeclarationSchema } from "../formats/gemini.js";
 import { budgetToEffort } from "../concerns/thinking.js";
 import { collapseTextParts } from "../concerns/message.js";
 
@@ -73,7 +74,7 @@ export function antigravityToOpenAIRequest(model, body, stream) {
             function: {
               name: func.name,
               description: func.description || "",
-              parameters: normalizeSchemaTypes(func.parameters) || { type: "object", properties: {} }
+              parameters: normalizeSchemaTypes(functionDeclarationSchema(func)) || { type: "object", properties: {} }
             }
           });
         }
