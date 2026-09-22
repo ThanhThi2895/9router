@@ -56,8 +56,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            APK_MIRROR=dl-cdn.alpinelinux.org
-            NPM_REGISTRY=https://registry.npmjs.org
+            ALPINE_MIRROR=dl-cdn.alpinelinux.org
+            NPM_REGISTRY=https://registry.npmjs.org/
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
