@@ -1,6 +1,7 @@
 import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { GEMINI_ROLE, OPENAI_FINISH, GEMINI_FINISH } from "../schema/index.js";
+import { getGeminiThoughtSignatureSync } from "../../services/thoughtSignatureStore.js";
 
 // Convert OpenAI SSE chunk to Antigravity SSE format
 // Real Antigravity format:
@@ -62,12 +63,12 @@ export function openaiToAntigravityResponse(chunk, state) {
       try { args = JSON.parse(accum.arguments); } catch { /* empty */ }
       // Restore original tool name if it was prefixed during cloaking
       const originalName = state.toolNameMap?.get(accum.name) || accum.name;
-      parts.push({
-        functionCall: {
-          name: originalName,
-          args
-        }
-      });
+      // Return the id (and the upstream Gemini signature, if any) so the client's
+      // history round-trips them on the next turn.
+      const part = { functionCall: { ...(accum.id && { id: accum.id }), name: originalName, args } };
+      const signature = accum.id ? getGeminiThoughtSignatureSync(accum.id, state.sessionId) : null;
+      if (signature) part.thoughtSignature = signature;
+      parts.push(part);
     }
   }
 

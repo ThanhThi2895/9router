@@ -6,10 +6,11 @@ import { ROLE, GEMINI_ROLE, OPENAI_BLOCK } from "../schema/index.js";
 import { functionDeclarationSchema } from "../formats/gemini.js";
 import { budgetToEffort } from "../concerns/thinking.js";
 import { collapseTextParts } from "../concerns/message.js";
+import { storeGeminiThoughtSignature } from "../../services/thoughtSignatureStore.js";
 
 // Convert Antigravity request to OpenAI format
 // Antigravity body: { project, model, userAgent, requestType, requestId, request: { contents, systemInstruction, tools, toolConfig, generationConfig, sessionId } }
-export function antigravityToOpenAIRequest(model, body, stream) {
+export function antigravityToOpenAIRequest(model, body, stream, credentials = null) {
   const req = body.request || body;
   const result = {
     model: model,
@@ -51,8 +52,9 @@ export function antigravityToOpenAIRequest(model, body, stream) {
 
   // Convert contents to messages
   if (req.contents && Array.isArray(req.contents)) {
+    const toolIds = { seq: 0, pending: new Map(), sessionId: credentials?._clientSessionId || null, model };
     for (const content of req.contents) {
-      const converted = convertContent(content);
+      const converted = convertContent(content, toolIds);
       if (converted) {
         if (Array.isArray(converted)) {
           result.messages.push(...converted);
@@ -118,7 +120,9 @@ function normalizeSchemaTypes(schema) {
 
 // Convert Antigravity content to OpenAI message
 // Handles: text, thought, thoughtSignature, functionCall, functionResponse, inlineData
-function convertContent(content) {
+// toolIds: conversation-wide state so id-less functionCall/functionResponse pairs get
+// unique ids (paired FIFO per tool name, as Gemini pairs them by order).
+function convertContent(content, toolIds) {
   const role = content.role === GEMINI_ROLE.MODEL ? ROLE.ASSISTANT : content.role === GEMINI_ROLE.USER ? ROLE.USER : content.role;
 
   if (!content.parts || !Array.isArray(content.parts)) {
@@ -162,9 +166,18 @@ function convertContent(content) {
 
     // Function call
     if (part.functionCall) {
+      const name = part.functionCall.name;
+      const id = part.functionCall.id || `call_${name}_${toolIds.seq++}`;
+      if (!toolIds.pending.has(name)) toolIds.pending.set(name, []);
+      toolIds.pending.get(name).push(id);
+      // The client echoes back the signature it received; keep it so openai→gemini
+      // replays the real one instead of the placeholder (placeholders degrade Gemini 3
+      // into writing tool calls as plain text).
+      if (part.thoughtSignature) {
+        storeGeminiThoughtSignature(id, part.thoughtSignature, toolIds.sessionId, toolIds.model);
+      }
       toolCalls.push({
-        // Deterministic id from name so the matching functionResponse pairs correctly.
-        id: part.functionCall.id || `call_${part.functionCall.name}`,
+        id,
         type: OPENAI_BLOCK.FUNCTION,
         function: {
           name: part.functionCall.name,
@@ -175,9 +188,12 @@ function convertContent(content) {
 
     // Function response → collect all, each becomes a separate tool message
     if (part.functionResponse) {
+      const queue = toolIds.pending.get(part.functionResponse.name) || [];
+      const idx = part.functionResponse.id ? queue.indexOf(part.functionResponse.id) : 0;
+      const [pairedId] = idx >= 0 ? queue.splice(idx, 1) : [];
       toolResults.push({
         role: ROLE.TOOL,
-        tool_call_id: part.functionResponse.id || `call_${part.functionResponse.name}`,
+        tool_call_id: part.functionResponse.id || pairedId || `call_${part.functionResponse.name}`,
         content: JSON.stringify(part.functionResponse.response?.result || part.functionResponse.response || {})
       });
     }

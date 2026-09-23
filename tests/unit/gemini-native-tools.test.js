@@ -186,7 +186,7 @@ describe("Gemini native endpoint — tool calls", () => {
     const parts = events.flatMap((event) => event.candidates?.[0]?.content?.parts ?? []);
     const call = parts.find((part) => part.functionCall);
 
-    expect(call.functionCall).toEqual({ name: "run_command", args: { command: "git status" } });
+    expect(call.functionCall).toEqual({ id: "call_1", name: "run_command", args: { command: "git status" } });
     expect(events.at(-1).usageMetadata.totalTokenCount).toBe(15);
   });
 
