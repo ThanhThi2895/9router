@@ -116,6 +116,14 @@ export function tryParseJSON(str) {
   return safeParseJSON(str, null);
 }
 
+// functionCall.args is a protobuf Struct: only a JSON object is valid. Truncated or
+// non-object tool arguments in replayed history (null, arrays, strings) make Google
+// reject every later turn of the conversation with a detail-free 400 INVALID_ARGUMENT.
+export function toFunctionCallArgs(raw) {
+  const parsed = tryParseJSON(raw);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
 // Generate request ID
 export function generateRequestId() {
   return `agent-${crypto.randomUUID()}`;

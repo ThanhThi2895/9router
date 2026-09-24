@@ -12,6 +12,7 @@ import {
   convertOpenAIContentToParts,
   extractTextContent,
   tryParseJSON,
+  toFunctionCallArgs,
   generateRequestId,
   generateSessionId,
   generateProjectId,
@@ -128,7 +129,7 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
           for (const tc of msg.tool_calls) {
             if (tc.type !== OPENAI_BLOCK.FUNCTION) continue;
 
-            const args = tryParseJSON(tc.function?.arguments || "{}");
+            const args = toFunctionCallArgs(tc.function?.arguments || "{}");
             const cachedSig = tc.id ? getGeminiThoughtSignatureSync(tc.id, sessionId, model) : null;
             // First call gets cached signature or fallback; sibling calls remain unsigned if no cached sig
             const callSig = cachedSig || (!firstFunctionCallSeen ? signature : undefined);
@@ -351,7 +352,7 @@ function wrapInCloudCodeEnvelopeForClaude(model, claudeRequest, credentials = nu
               functionCall: {
                 id: block.id,
                 name: sanitizeGeminiFunctionName(block.name),
-                args: block.input || {}
+                args: toFunctionCallArgs(block.input)
               }
             };
             if (callSig) {

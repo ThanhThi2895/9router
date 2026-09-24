@@ -31,6 +31,7 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType, shouldDefaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { describeGeminiRequestShape } from "../utils/geminiRequestShape.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -484,6 +485,10 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (log?.errorLine) {
       const urlStr = providerUrl ? `\n    URL: ${providerUrl}` : "";
       log.errorLine(reqTag, "✗", `ERROR ${statusCode} · ${provider}/${model} · ${Date.now() - requestStartTime}ms${urlStr}\n    ${errMsg}`);
+    }
+    if (statusCode === HTTP_STATUS.BAD_REQUEST) {
+      const shape = describeGeminiRequestShape(finalBody || translatedBody);
+      if (shape) log?.warn?.("REQ_SHAPE", `${provider}/${model}\n    ${shape}`);
     }
     reqLogger.logError(new Error(message), finalBody || translatedBody);
     return createErrorResult(statusCode, errMsg, resetsAtMs);
