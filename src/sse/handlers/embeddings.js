@@ -13,6 +13,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
+import { recordUnresolvedModel, isModelNotFoundError, createUpstreamModelNotFoundRecorder } from "../services/unresolvedModel.js";
 
 function exactEmbeddingUsage(raw) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw) || raw.estimated === true) return null;
@@ -67,6 +68,7 @@ export async function handleEmbeddings(request) {
 
   if (!modelStr) {
     log.warn("EMBEDDINGS", "Missing model");
+    recordUnresolvedModel({ request, requestedModel: "", reason: "missing_model" });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   }
 
@@ -78,6 +80,7 @@ export async function handleEmbeddings(request) {
   const modelInfo = await getModelInfo(modelStr);
   if (!modelInfo.provider) {
     log.warn("EMBEDDINGS", "Invalid model format", { model: modelStr });
+    recordUnresolvedModel({ request, requestedModel: modelStr, reason: "invalid_model_format" });
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
   }
 
@@ -94,6 +97,11 @@ export async function handleEmbeddings(request) {
   let lastError = null;
   let lastStatus = null;
 
+  const modelNotFound = createUpstreamModelNotFoundRecorder({
+    request,
+    requestedModel: modelStr,
+    provider,
+  });
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
 
@@ -103,13 +111,16 @@ export async function handleEmbeddings(request) {
         const errorMsg = lastError || credentials.lastError || "Unavailable";
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
         log.warn("EMBEDDINGS", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
+        modelNotFound.commit();
         return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
       }
       if (excludeConnectionIds.size === 0) {
         log.error("AUTH", `No credentials for provider: ${provider}`);
+        recordUnresolvedModel({ request, requestedModel: modelStr, reason: "no_credentials", provider });
         return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
       }
       log.warn("EMBEDDINGS", "No more accounts available", { provider });
+      modelNotFound.commit();
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
     }
 
@@ -150,6 +161,8 @@ export async function handleEmbeddings(request) {
       return result.response;
     }
 
+    modelNotFound.observe(result.status, result.error);
+
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
 
     if (shouldFallback) {
@@ -160,6 +173,7 @@ export async function handleEmbeddings(request) {
       continue;
     }
 
+    modelNotFound.commit();
     return result.response;
   }
 }

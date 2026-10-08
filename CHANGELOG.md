@@ -1,3 +1,8 @@
+# Unreleased
+
+## Features
+- **Usage**: log requests targeting missing, unroutable, or uncredentialed models to durable aggregated SQLite storage and display them under Dashboard Usage → Missing models tab with resolution and clearing controls
+
 # v0.5.95 (2026-10-01)
 
 ## Features

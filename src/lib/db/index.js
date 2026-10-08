@@ -67,6 +67,12 @@ export {
   saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders,
 } from "./repos/requestDetailsRepo.js";
 
+// Unresolved models
+export {
+  recordUnresolvedModelEvent, flushUnresolvedModels, getUnresolvedModels,
+  setUnresolvedModelResolved, deleteUnresolvedModel, clearUnresolvedModels,
+} from "./repos/unresolvedModelsRepo.js";
+
 // Export/import full DB
 export async function exportDb() {
   const db = await getAdapter();

@@ -13,6 +13,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
+import { recordUnresolvedModel, isModelNotFoundError, createUpstreamModelNotFoundRecorder } from "../services/unresolvedModel.js";
 
 // Providers that don't require credentials (noAuth)
 const NO_AUTH_PROVIDERS = new Set(["sdwebui", "comfyui"]);
@@ -43,7 +44,10 @@ export async function handleImageGeneration(request) {
     if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
   }
 
-  if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  if (!modelStr) {
+    recordUnresolvedModel({ request, requestedModel: "", reason: "missing_model" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  }
   if (!body.prompt) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: prompt");
 
   // Combo expansion: model may be a combo name → run fallback/round-robin across models
@@ -56,7 +60,7 @@ export async function handleImageGeneration(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId }),
+      handleSingleModel: (b, m) => handleSingleModelImage(b, m, { wantsStream, binaryOutput, preferredConnectionId, request }),
       log,
       comboName: modelStr,
       comboStrategy,
@@ -64,12 +68,15 @@ export async function handleImageGeneration(request) {
     });
   }
 
-  return handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId });
+  return handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, request });
 }
 
-async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId } = {}) {
+async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutput, preferredConnectionId, request } = {}) {
   const modelInfo = await getModelInfo(modelStr);
-  if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  if (!modelInfo.provider) {
+    recordUnresolvedModel({ request, requestedModel: modelStr, reason: "invalid_model_format" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  }
 
   const { provider, model } = modelInfo;
 
@@ -82,6 +89,15 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       binaryOutput,
     });
     if (result.success) return result.response;
+    if (isModelNotFoundError(result.status, result.error)) {
+      recordUnresolvedModel({
+        request,
+        requestedModel: modelStr,
+        reason: "upstream_model_not_found",
+        provider,
+        error: result.error,
+      });
+    }
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "Image generation failed");
   }
 
@@ -90,6 +106,11 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
   let lastError = null;
   let lastStatus = null;
 
+  const modelNotFound = createUpstreamModelNotFoundRecorder({
+    request,
+    requestedModel: modelStr,
+    provider,
+  });
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model, { preferredConnectionId });
 
@@ -97,11 +118,14 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       if (credentials?.allRateLimited) {
         const errorMsg = lastError || credentials.lastError || "Unavailable";
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
+        modelNotFound.commit();
         return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman);
       }
       if (excludeConnectionIds.size === 0) {
+        recordUnresolvedModel({ request, requestedModel: modelStr, reason: "no_credentials", provider });
         return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
       }
+      modelNotFound.commit();
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
     }
 
@@ -128,6 +152,8 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
 
     if (result.success) return result.response;
 
+    modelNotFound.observe(result.status, result.error);
+
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
 
     if (shouldFallback) {
@@ -137,6 +163,7 @@ async function handleSingleModelImage(body, modelStr, { wantsStream, binaryOutpu
       continue;
     }
 
+    modelNotFound.commit();
     return result.response;
   }
 }

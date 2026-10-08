@@ -10,6 +10,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
+import { recordUnresolvedModel, isModelNotFoundError, createUpstreamModelNotFoundRecorder } from "../services/unresolvedModel.js";
 
 // Derived from providers.js: any TTS provider not noAuth requires stored credentials
 const CREDENTIALED_PROVIDERS = new Set(
@@ -41,7 +42,10 @@ export async function handleTts(request) {
     if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
   }
 
-  if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  if (!modelStr) {
+    recordUnresolvedModel({ request, requestedModel: "", reason: "missing_model" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  }
   if (!body.input) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: input");
 
   // Combo expansion: model may be a combo name → run fallback/round-robin across models
@@ -54,7 +58,7 @@ export async function handleTts(request) {
     return handleComboChat({
       body,
       models: comboModels,
-      handleSingleModel: (b, m) => handleSingleModelTts(b, m, responseFormat, language, style),
+      handleSingleModel: (b, m) => handleSingleModelTts(b, m, responseFormat, language, style, request),
       log,
       comboName: modelStr,
       comboStrategy,
@@ -62,12 +66,15 @@ export async function handleTts(request) {
     });
   }
 
-  return handleSingleModelTts(body, modelStr, responseFormat, language, style);
+  return handleSingleModelTts(body, modelStr, responseFormat, language, style, request);
 }
 
-async function handleSingleModelTts(body, modelStr, responseFormat, language, style) {
+async function handleSingleModelTts(body, modelStr, responseFormat, language, style, request = null) {
   const modelInfo = await getModelInfo(modelStr);
-  if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  if (!modelInfo.provider) {
+    recordUnresolvedModel({ request, requestedModel: modelStr, reason: "invalid_model_format" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  }
 
   const { provider, model } = modelInfo;
   log.info("ROUTING", `Provider: ${provider}, Voice: ${model}`);
@@ -76,6 +83,15 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   if (!CREDENTIALED_PROVIDERS.has(provider)) {
     const result = await handleTtsCore({ provider, model, input: body.input, responseFormat, language, style });
     if (result.success) return result.response;
+    if (isModelNotFoundError(result.status, result.error)) {
+      recordUnresolvedModel({
+        request,
+        requestedModel: modelStr,
+        reason: "upstream_model_not_found",
+        provider,
+        error: result.error,
+      });
+    }
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "TTS failed");
   }
 
@@ -84,6 +100,11 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
   let lastError = null;
   let lastStatus = null;
 
+  const modelNotFound = createUpstreamModelNotFoundRecorder({
+    request,
+    requestedModel: modelStr,
+    provider,
+  });
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
 
@@ -91,9 +112,14 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
       if (credentials?.allRateLimited) {
         const msg = lastError || credentials.lastError || "Unavailable";
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
+        modelNotFound.commit();
         return unavailableResponse(status, `[${provider}/${model}] ${msg}`, credentials.retryAfter, credentials.retryAfterHuman);
       }
-      if (excludeConnectionIds.size === 0) return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
+      if (excludeConnectionIds.size === 0) {
+        recordUnresolvedModel({ request, requestedModel: modelStr, reason: "no_credentials", provider });
+        return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
+      }
+      modelNotFound.commit();
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
     }
 
@@ -103,6 +129,8 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
 
     if (result.success) return result.response;
 
+    modelNotFound.observe(result.status, result.error);
+
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
     if (shouldFallback) {
       excludeConnectionIds.add(credentials.connectionId);
@@ -110,6 +138,7 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
       lastStatus = result.status;
       continue;
     }
+    modelNotFound.commit();
     return result.response || errorResponse(result.status, result.error);
   }
 }

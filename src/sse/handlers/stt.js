@@ -9,6 +9,7 @@ import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import * as log from "../utils/logger.js";
+import { recordUnresolvedModel, isModelNotFoundError, createUpstreamModelNotFoundRecorder } from "../services/unresolvedModel.js";
 
 // Providers requiring credentials for STT
 const CREDENTIALED_PROVIDERS = new Set(
@@ -53,11 +54,17 @@ export async function handleStt(request) {
     if (!valid) return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
   }
 
-  if (!modelStr) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  if (!modelStr) {
+    recordUnresolvedModel({ request, requestedModel: "", reason: "missing_model" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
+  }
   if (!formData.get("file")) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: file");
 
   const modelInfo = await getModelInfo(modelStr);
-  if (!modelInfo.provider) return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  if (!modelInfo.provider) {
+    recordUnresolvedModel({ request, requestedModel: modelStr, reason: "invalid_model_format" });
+    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid model format");
+  }
 
   const { provider, model } = modelInfo;
   log.info("ROUTING", `Provider: ${provider}, Model: ${model}`);
@@ -68,6 +75,15 @@ export async function handleStt(request) {
   if (!CREDENTIALED_PROVIDERS.has(provider)) {
     const result = await handleSttCore({ provider, model, formData, sttConfig: AI_PROVIDERS[provider]?.sttConfig, transport: modelTransport });
     if (result.success) return result.response;
+    if (isModelNotFoundError(result.status, result.error)) {
+      recordUnresolvedModel({
+        request,
+        requestedModel: modelStr,
+        reason: "upstream_model_not_found",
+        provider,
+        error: result.error,
+      });
+    }
     return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "STT failed");
   }
 
@@ -76,6 +92,11 @@ export async function handleStt(request) {
   let lastError = null;
   let lastStatus = null;
 
+  const modelNotFound = createUpstreamModelNotFoundRecorder({
+    request,
+    requestedModel: modelStr,
+    provider,
+  });
   while (true) {
     const credentials = await getProviderCredentials(provider, excludeConnectionIds, model);
 
@@ -83,9 +104,14 @@ export async function handleStt(request) {
       if (credentials?.allRateLimited) {
         const msg = lastError || credentials.lastError || "Unavailable";
         const status = lastStatus || Number(credentials.lastErrorCode) || HTTP_STATUS.SERVICE_UNAVAILABLE;
+        modelNotFound.commit();
         return unavailableResponse(status, `[${provider}/${model}] ${msg}`, credentials.retryAfter, credentials.retryAfterHuman);
       }
-      if (excludeConnectionIds.size === 0) return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
+      if (excludeConnectionIds.size === 0) {
+        recordUnresolvedModel({ request, requestedModel: modelStr, reason: "no_credentials", provider });
+        return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
+      }
+      modelNotFound.commit();
       return errorResponse(lastStatus || HTTP_STATUS.SERVICE_UNAVAILABLE, lastError || "All accounts unavailable");
     }
 
@@ -95,6 +121,8 @@ export async function handleStt(request) {
 
     if (result.success) return result.response;
 
+    modelNotFound.observe(result.status, result.error);
+
     const { shouldFallback } = await markAccountUnavailable(credentials.connectionId, result.status, result.error, provider, model);
     if (shouldFallback) {
       excludeConnectionIds.add(credentials.connectionId);
@@ -102,6 +130,7 @@ export async function handleStt(request) {
       lastStatus = result.status;
       continue;
     }
+    modelNotFound.commit();
     return result.response || errorResponse(result.status, result.error);
   }
 }
