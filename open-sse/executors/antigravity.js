@@ -68,6 +68,18 @@ function isImageModel(model) {
   return IMAGE_MODEL_PATTERNS.some(p => p.test(model));
 }
 
+// Keep only the parts an image model consumes: prompt text and reference media.
+// Gemini accepts both camelCase and snake_case keys, so either is passed through.
+function toImageGenPart(part) {
+  if (!part) return [];
+  if (part.text !== undefined) return [{ text: part.text }];
+  if (part.inlineData) return [{ inlineData: part.inlineData }];
+  if (part.inline_data) return [{ inline_data: part.inline_data }];
+  if (part.fileData) return [{ fileData: part.fileData }];
+  if (part.file_data) return [{ file_data: part.file_data }];
+  return [];
+}
+
 // Parse aspect ratio / resolution from model name suffixes
 // e.g. "gemini-3.1-flash-image-16x9" -> { aspectRatio: "16:9" }
 // e.g. "gemini-3.1-flash-image-1024x768" -> { aspectRatio: "4:3" }
@@ -147,13 +159,14 @@ export class AntigravityExecutor extends BaseExecutor {
       // Strip model name suffixes for the actual API model name
       const cleanModel = model.replace(/-(\d+)x(\d+)$/, "");
 
-      // Build simplified contents — text-only, merge all user messages
+      // Build simplified contents — text plus reference images (inline/file data),
+      // dropping tool calls, thought signatures and other chat-only parts
       const contents = [];
       const srcContents = body.request?.contents || body.contents || [];
       for (const c of srcContents) {
-        const textParts = (c.parts || []).filter(p => p.text !== undefined).map(p => ({ text: p.text }));
-        if (textParts.length > 0) {
-          contents.push({ role: c.role || "user", parts: textParts });
+        const parts = (c.parts || []).flatMap(toImageGenPart);
+        if (parts.length > 0) {
+          contents.push({ role: c.role || "user", parts });
         }
       }
 

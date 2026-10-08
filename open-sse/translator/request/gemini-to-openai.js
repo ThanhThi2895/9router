@@ -88,12 +88,23 @@ function convertGeminiContent(content) {
       parts.push({ type: OPENAI_BLOCK.TEXT, text: part.text });
     }
 
-    if (part.inlineData) {
+    // Gemini accepts camelCase and snake_case keys (REST examples use snake_case)
+    const inlineData = part.inlineData || part.inline_data;
+    if (inlineData?.data) {
       parts.push({
         type: OPENAI_BLOCK.IMAGE_URL,
         image_url: {
-          url: encodeDataUri(part.inlineData.mimeType, part.inlineData.data)
+          url: encodeDataUri(inlineData.mimeType || inlineData.mime_type, inlineData.data)
         }
+      });
+    }
+
+    const fileData = part.fileData || part.file_data;
+    const fileUri = fileData?.fileUri || fileData?.file_uri;
+    if (fileUri) {
+      parts.push({
+        type: OPENAI_BLOCK.IMAGE_URL,
+        image_url: { url: fileUri }
       });
     }
 
