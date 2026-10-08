@@ -356,7 +356,13 @@ export default function ModelSelectModal({
         const hardcodedModels = liveModels.length > 0
           ? liveModels
           : getModelsByProviderId(providerId);
-        const hardcodedIds = new Set(hardcodedModels.map((m) => m.id));
+        // Dedupe customs only against built-ins that survive the kind filter; a
+        // non-llm built-in (e.g. an image model) sharing the id must not hide
+        // the user's custom LLM entry in the LLM picker.
+        const visibleHardcoded = filterByKind(
+          hardcodedModels.map((m) => ({ id: m.id, name: m.name, value: `${alias}/${m.id}`, kind: getModelKind(m) }))
+        );
+        const hardcodedIds = new Set(visibleHardcoded.map((m) => m.id));
 
         // Custom models: if no hardcoded models (e.g. openrouter), show all aliases for this provider
         // Otherwise only show aliases where aliasName === modelId ("Add Model" button pattern)
@@ -379,7 +385,7 @@ export default function ModelSelectModal({
           .map((m) => ({ id: m.id, name: m.name || m.id, value: `${alias}/${m.id}`, isCustom: true }));
 
         const merged = [
-          ...hardcodedModels.map((m) => ({ id: m.id, name: m.name, value: `${alias}/${m.id}`, kind: getModelKind(m) })),
+          ...visibleHardcoded,
           ...customAliasModels,
           ...customRegisteredModels,
         ];

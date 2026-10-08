@@ -1180,7 +1180,9 @@ export default function ProviderDetailPage() {
       customModels,
       modelAliases,
       providerAlias: providerStorageAlias,
-      builtInModels: models,
+      // Dedupe only against the LLM chips rendered here; a non-llm built-in
+      // (e.g. an image model) sharing the id must not hide the custom row.
+      builtInModels: allModels,
       type: "llm",
     });
 
