@@ -12,7 +12,8 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
-import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { ROLE, RESPONSES_ITEM, OPENAI_BLOCK, DEFAULT_IMAGE_MIME } from "../../translator/schema/index.js";
+import { encodeDataUri } from "../../translator/concerns/image.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -166,6 +167,7 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
     const usage = response.usageMetadata || responseBody.usageMetadata;
     let textContent = "", reasoningContent = "";
     const toolCalls = [];
+    const images = [];
 
     if (content?.parts) {
       for (const part of content.parts) {
@@ -181,8 +183,13 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
         // Handle inline image data (from image generation models)
         const inlineData = part.inlineData || part.inline_data;
         if (inlineData?.data) {
-          const mimeType = inlineData.mimeType || inlineData.mime_type || "image/png";
-          textContent += `\n![image](data:${mimeType};base64,${inlineData.data})\n`;
+          const mimeType = inlineData.mimeType || inlineData.mime_type || DEFAULT_IMAGE_MIME;
+          const url = encodeDataUri(mimeType, inlineData.data);
+          // Markdown keeps chat UIs rendering the image; `images` carries it as
+          // structured data (same shape the streaming translator emits) so
+          // format-converting callers can rebuild a real image part.
+          textContent += `\n![image](${url})\n`;
+          images.push({ type: OPENAI_BLOCK.IMAGE_URL, image_url: { url } });
         }
       }
     }
@@ -191,6 +198,7 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
     if (textContent) message.content = textContent;
     if (reasoningContent) message.reasoning_content = reasoningContent;
     if (toolCalls.length > 0) message.tool_calls = toolCalls;
+    if (images.length > 0) message.images = images;
     if (!message.content && !message.tool_calls) message.content = "";
 
     let finishReason = (candidate.finishReason || "stop").toLowerCase();
