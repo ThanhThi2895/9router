@@ -2,6 +2,7 @@ import { register } from "../index.js";
 import { FORMATS } from "../formats.js";
 import { GEMINI_ROLE, OPENAI_FINISH, GEMINI_FINISH } from "../schema/index.js";
 import { getGeminiThoughtSignatureSync } from "../../services/thoughtSignatureStore.js";
+import { parseDataUri } from "../concerns/image.js";
 
 // Convert OpenAI SSE chunk to Antigravity SSE format
 // Real Antigravity format:
@@ -36,6 +37,15 @@ export function openaiToAntigravityResponse(chunk, state) {
   // Text content
   if (delta.content) {
     parts.push({ text: delta.content });
+  }
+
+  // Generated images → inlineData parts. Only inline data URIs map onto Gemini's
+  // inlineData; remote URLs are never fetched here.
+  if (Array.isArray(delta.images)) {
+    for (const image of delta.images) {
+      const parsed = parseDataUri(image?.image_url?.url);
+      if (parsed) parts.push({ inlineData: { mimeType: parsed.mimeType, data: parsed.base64 } });
+    }
   }
 
   // Accumulate tool calls silently (no emit until finish)

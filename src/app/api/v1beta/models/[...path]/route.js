@@ -126,7 +126,7 @@ export async function POST(request, { params }) {
       // Transform OpenAI SSE => Gemini SSE on the fly.
       // The @google/genai SDK always uses :streamGenerateContent?alt=sse and
       // expects Gemini SSE chunks (no [DONE] sentinel — stream just closes).
-      return transformOpenAISSEToGeminiSSE(response, resolvedModel);
+      return await transformOpenAISSEToGeminiSSE(response, resolvedModel);
     } else {
       // Convert OpenAI JSON response => Gemini GenerateContentResponse
       return await convertOpenAIResponseToGemini(response, resolvedModel);
@@ -399,9 +399,26 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
  * function arguments as fragments across chunks, and they have to be buffered and
  * emitted once as a complete functionCall, which that translator already does.
  */
-function transformOpenAISSEToGeminiSSE(upstreamResponse, model) {
+async function transformOpenAISSEToGeminiSSE(upstreamResponse, model) {
   if (!upstreamResponse.ok || !upstreamResponse.body) {
     return upstreamResponse;
+  }
+
+  // Some models are answered non-streaming even when the client asked for a
+  // stream (image models only support generateContent upstream). Convert the
+  // finished JSON and send it as the stream's single event.
+  if (!(upstreamResponse.headers.get("content-type") || "").includes("text/event-stream")) {
+    const converted = await convertOpenAIResponseToGemini(upstreamResponse, model);
+    if (!converted.ok) return converted;
+    const payload = await converted.text();
+    return new Response(`data: ${payload}\r\n\r\n`, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+      },
+    });
   }
 
   const decoder = new TextDecoder();
@@ -490,13 +507,15 @@ async function convertOpenAIResponseToGemini(response, model) {
   if (!choice) return asJson(body);
 
   const message = choice.message || {};
+  const images = Array.isArray(message.images) && message.images.length > 0 ? message.images : null;
   const chunk = {
     id: body.id,
     model: body.model || model,
     choices: [{
       delta: {
-        content: message.content,
+        content: images ? stripInlineImageMarkdown(message.content) : message.content,
         reasoning_content: message.reasoning_content,
+        images,
         tool_calls: message.tool_calls?.map((call, index) => ({ index, ...call })),
       },
       // A response with tool calls but no finish_reason would leave them buffered
@@ -508,4 +527,12 @@ async function convertOpenAIResponseToGemini(response, model) {
 
   const translated = openaiToAntigravityResponse(chunk, { _modelVersion: body.model || model });
   return asJson(translated?.response ?? body);
+}
+
+// Image-model replies carry each image twice: structured in `message.images` and
+// as a markdown data-URI copy in `content` for chat UIs. Gemini clients get the
+// image as an inlineData part, so drop the base64 copy from the text.
+const INLINE_IMAGE_MARKDOWN = /\n?!\[image\]\(data:[^)]*\)\n?/g;
+function stripInlineImageMarkdown(content) {
+  return typeof content === "string" ? content.replace(INLINE_IMAGE_MARKDOWN, "") : content;
 }
