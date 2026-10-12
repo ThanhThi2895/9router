@@ -12,6 +12,7 @@ import { initTranslators } from "open-sse/translator/index.js";
 import { geminiToOpenAIRequest } from "open-sse/translator/request/gemini-to-openai.js";
 import { openaiToAntigravityResponse } from "open-sse/translator/response/openai-to-antigravity.js";
 import { resolveGeminiModel } from "@/sse/services/geminiModel.js";
+import { getKeyAccessContext, enforceKeyAccessResolved } from "@/sse/services/keyAccess.js";
 
 let initialized = false;
 const GEMINI_NATIVE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -260,6 +261,11 @@ async function forwardGeminiNativeRequest(request, body, model, action) {
   if (!GEMINI_NATIVE_MODEL_PATTERN.test(modelId)) {
     return Response.json({ error: { message: "Invalid model" } }, { status: 400 });
   }
+
+  // Per-key access control: this path calls Gemini directly (not via handleChat),
+  // so restricted keys are checked here, before any credential lookup.
+  const keyAccessDenied = await enforceKeyAccessResolved(await getKeyAccessContext(request), model, "gemini", modelId);
+  if (keyAccessDenied) return keyAccessDenied;
   const excludeConnectionIds = new Set();
   const bodyText = JSON.stringify(body);
   let lastError = null;

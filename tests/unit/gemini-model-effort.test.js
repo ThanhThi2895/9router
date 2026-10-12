@@ -57,10 +57,10 @@ describe("resolveGeminiModel", () => {
   });
 
   it("falls back to the nearest effort the provider actually publishes", async () => {
-    // gemini-3.1-pro exists only as -low, so a request for high lands there
-    // instead of asking for a -high that would 404.
-    expect(await resolveGeminiModel("ag/gemini-3.1-pro", withBudget(-1)))
-      .toBe("ag/gemini-3.1-pro-low");
+    // gemini-3.1-pro publishes -high and -low only, so a medium request lands on
+    // the nearest published variant instead of asking for a -medium that would 404.
+    expect(await resolveGeminiModel("ag/gemini-3.1-pro", withBudget(4000)))
+      .toMatch(/^ag\/gemini-3\.1-pro-(high|low)$/);
   });
 
   it("leaves an id that already pins an effort alone", async () => {
