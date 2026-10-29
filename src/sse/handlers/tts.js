@@ -30,7 +30,7 @@ export async function handleTts(request) {
 
   const url = new URL(request.url);
   const modelStr = body.model;
-  const responseFormat = url.searchParams.get("response_format") || "mp3"; // mp3 (default) | json
+  const responseFormat = url.searchParams.get("response_format") || body.response_format || "mp3"; // mp3 (default) | json
   const language = body.language || ""; // Optional language hint (currently used by Gemini)
   const style = body.style || ""; // Optional style/voice instructions (e.g. Xiaomi MiMo)
   log.request("POST", `${url.pathname} | ${modelStr} | format=${responseFormat}${language ? ` | lang=${language}` : ""}`);
@@ -121,6 +121,20 @@ async function handleSingleModelTts(body, modelStr, responseFormat, language, st
         return unavailableResponse(status, `[${provider}/${model}] ${msg}`, credentials.retryAfter, credentials.retryAfterHuman);
       }
       if (excludeConnectionIds.size === 0) {
+        if (provider === "ollama-local") {
+          const result = await handleTtsCore({ provider, model, input: body.input, credentials: null, responseFormat, language, style });
+          if (result.success) return result.response;
+          if (isModelNotFoundError(result.status, result.error)) {
+            recordUnresolvedModel({
+              request,
+              requestedModel: modelStr,
+              reason: "upstream_model_not_found",
+              provider,
+              error: result.error,
+            });
+          }
+          return errorResponse(result.status || HTTP_STATUS.BAD_GATEWAY, result.error || "TTS failed");
+        }
         recordUnresolvedModel({ request, requestedModel: modelStr, reason: "no_credentials", provider });
         return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
       }
