@@ -480,6 +480,13 @@ export async function handleComboChat({
       // otherwise be delivered as a successful empty answer with no failover.
       // Peek the stream for real content before committing to this candidate.
       if (result.ok) {
+        // The last candidate is returned whatever the peek finds, so peeking it only
+        // holds the stream back — for a reasoning-then-tool-call turn, until it ends.
+        if (i === rotatedModels.length - 1) {
+          log.info("COMBO", `Model ${modelStr} succeeded`);
+          return result;
+        }
+
         let peeked = null;
         try {
           peeked = await peekComboResponse(result, log);
@@ -497,25 +504,22 @@ export async function handleComboChat({
 
         if (!peeked) {
           // Non-streaming (or non-SSE) response — not this peek's job. The zero-content
-          // JSON check still applies on a non-final seat.
-          const isLastModel = i === rotatedModels.length - 1;
-          if (!isLastModel) {
-            const contentType = result.headers?.get?.("content-type") || "";
-            if (contentType.includes("application/json")) {
-              try {
-                const peekBody = await result.clone().json();
-                if (isZeroContentResponse(peekBody)) {
-                  log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
-                  if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
-                    clearStickyComboSession(comboName, sessionId);
-                  }
-                  lastError = "Zero usable content";
-                  lastStatus = 200;
-                  continue;
+          // JSON check still applies (this is never the final seat).
+          const contentType = result.headers?.get?.("content-type") || "";
+          if (contentType.includes("application/json")) {
+            try {
+              const peekBody = await result.clone().json();
+              if (isZeroContentResponse(peekBody)) {
+                log.warn("COMBO", `Model ${modelStr} returned HTTP 200 with zero usable content, falling back to next model`);
+                if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
+                  clearStickyComboSession(comboName, sessionId);
                 }
-              } catch {
-                // Ignore JSON parse errors
+                lastError = "Zero usable content";
+                lastStatus = 200;
+                continue;
               }
+            } catch {
+              // Ignore JSON parse errors
             }
           }
 
@@ -529,12 +533,10 @@ export async function handleComboChat({
         }
 
         // Empty generation. Fall through to the next candidate unless this is a legitimately
-        // empty class (content filter) or the last candidate — in which case return the
-        // (empty) response as-is, preserving prior behaviour rather than manufacturing a 5xx.
+        // empty class (content filter) — return that as-is; the next candidate would recur it.
         const reasonLabel = peeked.finishReason || "no-content";
-        const isLast = i === rotatedModels.length - 1;
-        if (isNoRetryFinish(peeked.finishReason) || isLast) {
-          log.warn("COMBO", `Model ${modelStr} returned empty (${reasonLabel}) — ${isNoRetryFinish(peeked.finishReason) ? "no-retry class" : "last candidate"}, returning as-is`);
+        if (isNoRetryFinish(peeked.finishReason)) {
+          log.warn("COMBO", `Model ${modelStr} returned empty (${reasonLabel}) — no-retry class, returning as-is`);
           return peeked.response;
         }
 

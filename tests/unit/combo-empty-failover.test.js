@@ -351,6 +351,38 @@ describe("combo fall-through per client format (real combo.js + streaming pipeli
       });
     });
   }
+  // A reasoning-then-tool-call turn carries no content until its last frame, so a peek on the
+  // last candidate held the whole stream back. The tail frame is gated: before the fix
+  // handleComboChat could not resolve until it was released.
+  it("the last candidate streams without a peek — reasoning reaches the client before the stream ends", async () => {
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const frames = [ROLE, REASONING, TOOL, DONE];
+    let i = 0;
+    const body = new ReadableStream({
+      async pull(controller) {
+        if (i >= frames.length) { controller.close(); return; }
+        if (frames[i] === TOOL) await gate;
+        controller.enqueue(enc.encode(frames[i++]));
+      },
+    });
+    const pending = handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["openai/m0"],
+      handleSingleModel: async () => new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } }),
+      log: LOG, comboName: `c-${Math.random()}`, comboStrategy: "fallback",
+    });
+    const res = await Promise.race([pending, new Promise((r) => setTimeout(() => r("held"), 500))]);
+    expect(res).not.toBe("held");
+    const reader = res.body.getReader();
+    let seen = "";
+    while (!seen.includes("reasoning_content")) seen += dec.decode((await reader.read()).value);
+    release();
+    let rest = "";
+    for (let r = await reader.read(); !r.done; r = await reader.read()) rest += dec.decode(r.value);
+    expect(rest).toContain("call_1");
+  });
+
   it("OpenAI chat / Anthropic clients: a content_filter finish is NOT retried", async () => {
     for (const sourceFormat of [FORMATS.OPENAI, FORMATS.CLAUDE]) {
       const { tried } = await combo([[ROLE, FILTER_STOP, DONE], [ROLE, C("from-m1"), STOP, DONE]], { sourceFormat });
