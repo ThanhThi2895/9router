@@ -292,6 +292,21 @@ export default function ProfilePage() {
     }
   };
 
+  const updateAntigravityBareModelRouting = async (enabled) => {
+    setSettings(prev => ({ ...prev, antigravityBareModelRouting: enabled }));
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ antigravityBareModelRouting: enabled }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error("Failed to update Antigravity bare model routing:", err);
+      setSettings(prev => ({ ...prev, antigravityBareModelRouting: !enabled }));
+    }
+  };
+
   const updateStickyLimit = async (limit) => {
     const numLimit = parseInt(limit);
     if (isNaN(numLimit) || numLimit < 1) return;
@@ -1514,6 +1529,24 @@ export default function ProfilePage() {
                 />
               </div>
             )}
+
+            {/* Antigravity bare model routing */}
+            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm sm:text-base">Route bare model names to Antigravity</p>
+                <p className="text-xs sm:text-sm text-text-muted">
+                  When on, a model id sent without a provider prefix (e.g. <code>claude-opus-5-5</code>) goes to
+                  Antigravity if it is in your Antigravity catalog. Combos and aliases still win. API keys scoped
+                  to other providers lose access to those ids, and a key whose allow list names a bare id will spend
+                  Antigravity credentials. Antigravity is marked deprecated.
+                </p>
+              </div>
+              <Toggle
+                checked={!!settings.antigravityBareModelRouting}
+                onChange={() => updateAntigravityBareModelRouting(!settings.antigravityBareModelRouting)}
+                disabled={loading}
+              />
+            </div>
 
             <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
               {settings.fallbackStrategy === "round-robin"

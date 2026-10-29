@@ -102,9 +102,9 @@ async function getAllowSets(ctx) {
   return ctx._sets;
 }
 
-async function isModelStringAllowed(ctx, requested) {
+async function isModelStringAllowed(ctx, requested, resolvedInfo = null) {
   const sets = await getAllowSets(ctx);
-  const info = await getModelInfo(requested);
+  const info = resolvedInfo || await getModelInfo(requested);
   // provider null ⇔ an existing combo with no members (routes nowhere).
   if (!info?.provider) return sets.combos.has(lower(requested));
   return sets.models.has(canonicalModel(info.provider, info.model));
@@ -117,17 +117,19 @@ export function keyAccessDeniedResponse(ctx, requested) {
 
 /**
  * Gate for endpoints whose `model` may be a combo or a model (chat, image, tts).
- * Call with the requested string BEFORE combo expansion.
+ * Call with the requested string BEFORE combo expansion. Pass `modelInfo` (the
+ * getModelInfo result) when the caller routes with it too, so the check and the
+ * routing cannot resolve the same string to different providers.
  * @returns {Promise<Response|null>} a 403 Response, or null when allowed.
  */
-export async function enforceKeyAccess(ctx, requested) {
+export async function enforceKeyAccess(ctx, requested, modelInfo = null) {
   if (!ctx) return null;
   if (typeof requested !== "string" || !requested) return keyAccessDeniedResponse(ctx, String(requested ?? ""));
   const sets = await getAllowSets(ctx);
   const comboModels = await getComboModels(requested);
   const allowed = comboModels
     ? sets.combos.has(lower(requested))
-    : await isModelStringAllowed(ctx, requested);
+    : await isModelStringAllowed(ctx, requested, modelInfo);
   return allowed ? null : keyAccessDeniedResponse(ctx, requested);
 }
 

@@ -98,7 +98,9 @@ export async function handleChat(request, clientRawRequest = null) {
   // models. Checked once on the requested target, before bypass, combo expansion
   // and any credential lookup; an allowed combo grants the members it routes to.
   const keyAccess = await getKeyAccessContext(request);
-  const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr);
+  // Resolved once and reused for routing below so both see the same provider.
+  const modelInfo = await getModelInfo(modelStr);
+  const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr, modelInfo);
   if (keyAccessDenied) return keyAccessDenied;
 
   // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
@@ -186,14 +188,14 @@ export async function handleChat(request, clientRawRequest = null) {
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null, modelInfo);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null) {
-  const modelInfo = await getModelInfo(modelStr);
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, resolvedModelInfo = null) {
+  const modelInfo = resolvedModelInfo || await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
   if (!modelInfo.provider) {

@@ -1,5 +1,7 @@
 import { getModelsByProviderId } from "open-sse/config/providerModels.js";
+import { getComboByName } from "@/lib/localDb";
 import { resolveModelAlias } from "./model.js";
+import { resolveAntigravityBareModel } from "./antigravityBareModel.js";
 
 /**
  * Model-name resolution for the Gemini-native endpoint (`/v1beta/models/...`).
@@ -73,7 +75,18 @@ async function locate(modelStr) {
   }
 
   const at = modelStr.indexOf("/");
-  if (at < 0) return null;
+  if (at < 0) {
+    // A bare id: a combo of that name wins and is left for the chat pipeline;
+    // otherwise the Antigravity bare-model rule may place it (off by default).
+    try {
+      if (await getComboByName(modelStr)) return null;
+      const bare = await resolveAntigravityBareModel(modelStr);
+      if (bare) return { provider: bare.provider, modelId: bare.model };
+    } catch {
+      // fall through
+    }
+    return null;
+  }
   return { provider: modelStr.slice(0, at), modelId: modelStr.slice(at + 1) };
 }
 

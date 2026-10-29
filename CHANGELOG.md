@@ -1,6 +1,7 @@
 # Unreleased
 
 ## Features
+- **Antigravity**: add an opt-in `antigravityBareModelRouting` setting (dashboard Profile toggle) that routes bare model ids found in the Antigravity catalog to an active Antigravity connection, picks effort variants for them on `/v1beta`, and lists them in `/v1/models`; aliases and same-named combos still win
 - **Usage**: log requests targeting missing, unroutable, or uncredentialed models to durable aggregated SQLite storage and display them under Dashboard Usage → Missing models tab with resolution and clearing controls
 
 # v0.5.112 (2026-10-28)

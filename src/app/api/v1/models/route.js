@@ -9,6 +9,7 @@ import {
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
+import { getAntigravityBareModelIds } from "@/sse/services/antigravityBareModel.js";
 import { getKeyAccessContext, filterModelsListForKey } from "@/sse/services/keyAccess.js";
 import { resolveKiroModels } from "open-sse/services/kiroModels.js";
 import { resolveKimchiModels } from "open-sse/services/kimchiModels.js";
@@ -629,6 +630,32 @@ export async function buildModelsList(kindFilter, options = {}) {
           owned_by: outputAlias,
         });
       }
+    }
+  }
+
+  // Bare Antigravity ids come after combos so a same-named combo shadows them in the dedupe below.
+  if (kindFilter.includes(LLM_KIND) || kindFilter.includes("image")) {
+    try {
+      const bareIds = await getAntigravityBareModelIds();
+      if (bareIds) {
+        const kindById = new Map((PROVIDER_MODELS.ag || []).map((m) => [m.id, modelKind(m)]));
+        for (const m of customModels) {
+          if (m?.id && !kindById.has(m.id)) kindById.set(m.id, modelKind(m));
+        }
+        for (const id of bareIds) {
+          if (Object.hasOwn(modelAliases, id)) continue; // a user alias wins in routing
+          if (!kindFilter.includes(kindById.get(id) || LLM_KIND)) continue;
+          const caps = getCapabilitiesForModel("antigravity", id);
+          const entry = { id, object: "model", owned_by: "antigravity", capabilities: caps };
+          const contextWindow = caps?.contextWindow;
+          const maxOutput = caps?.maxOutput;
+          if (Number.isFinite(contextWindow)) entry.context_length = contextWindow;
+          if (Number.isFinite(maxOutput)) entry.max_completion_tokens = maxOutput;
+          models.push(entry);
+        }
+      }
+    } catch {
+      // bare-model listing is best-effort
     }
   }
 

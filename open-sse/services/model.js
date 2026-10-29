@@ -90,8 +90,11 @@ export function resolveModelAliasFromMap(alias, aliases) {
  * Get full model info (parse or resolve)
  * @param {string} modelStr - Model string
  * @param {object|function} aliasesOrGetter - Aliases object or async function to get aliases
+ * @param {object} [options]
+ * @param {function} [options.resolveBareModel] - async (modelId) => {provider, model} | null,
+ *   consulted after alias lookups and before prefix inference. Errors fall through.
  */
-export async function getModelInfoCore(modelStr, aliasesOrGetter) {
+export async function getModelInfoCore(modelStr, aliasesOrGetter, options = {}) {
   const parsed = parseModel(modelStr);
 
   if (!parsed.isAlias) {
@@ -113,6 +116,15 @@ export async function getModelInfoCore(modelStr, aliasesOrGetter) {
     resolveModelAliasFromMap(parsed.model, BUILTIN_MODEL_ALIASES);
   if (resolved) {
     return resolved;
+  }
+
+  if (typeof options.resolveBareModel === "function") {
+    try {
+      const bare = await options.resolveBareModel(parsed.model);
+      if (bare) return bare;
+    } catch {
+      // fail open: fall through to prefix inference
+    }
   }
 
   // Fallback: infer provider from model name prefix
