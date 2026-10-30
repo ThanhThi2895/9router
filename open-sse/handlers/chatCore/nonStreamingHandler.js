@@ -94,18 +94,29 @@ function openAICompletionToResponses(responseBody, customToolNames = null) {
 }
 
 /**
- * Translate non-streaming response body from provider format → OpenAI format.
+ * Render the OpenAI intermediate in the client's format. Every upstream branch
+ * converts to OpenAI first; without this a Claude or Responses client would get
+ * a raw chat.completion.
+ */
+function renderForClient(openaiBody, sourceFormat, customToolNames) {
+  if (sourceFormat === FORMATS.CLAUDE) return openAICompletionToClaudeMessage(openaiBody);
+  if (sourceFormat === FORMATS.OPENAI_RESPONSES) return openAICompletionToResponses(openaiBody, customToolNames);
+  return openaiBody;
+}
+
+/**
+ * Translate non-streaming response body from provider format → client format.
  */
 export function translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, customToolNames = null) {
   if (targetFormat === sourceFormat) return responseBody;
-  // Provider responded in OpenAI Chat Completions shape but the client speaks
-  // Responses API — convert so tool_calls/text surface as Responses `output`.
-  if (targetFormat === FORMATS.OPENAI && sourceFormat === FORMATS.OPENAI_RESPONSES) {
-    return openAICompletionToResponses(responseBody, customToolNames);
-  }
-  if (targetFormat === FORMATS.OPENAI && sourceFormat === FORMATS.CLAUDE) {
-    return openAICompletionToClaudeMessage(responseBody);
-  }
+  return renderForClient(providerBodyToOpenAI(responseBody, targetFormat), sourceFormat, customToolNames);
+}
+
+/**
+ * Convert a provider-format non-streaming body into an OpenAI chat.completion.
+ * A body the provider branch does not recognise is returned as is.
+ */
+function providerBodyToOpenAI(responseBody, targetFormat) {
   if (targetFormat === FORMATS.OPENAI) return responseBody;
 
   // Gemini / Antigravity
