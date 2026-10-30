@@ -23,6 +23,7 @@ Provider-agnostic SSE engine: one OpenAI-style request → any provider (LLM cha
 
 - Config-driven, DRY, camelCase. NEVER hardcode values, models, or block/role strings — use `config/` + `schema/` constants.
 - Translator pipeline pivots through OpenAI as the intermediate format. A translator registered on the exact `source:target` pair (e.g. `claude:kiro`) runs as a **direct route**, skipping the lossy double-hop.
+- Provider-run web search travels the OpenAI pivot as the hosted tool `{type:"web_search"}` on requests, and as `annotations` (`url_citation`) plus the raw Gemini `groundingMetadata` in the `grounding_metadata` extension field on responses (`translator/concerns/grounding.js`, `webSearch.js`). New translators reuse this carrier.
 - Translators self-register via `register(from, to, reqFn, resFn)` as an import side-effect — new files MUST be imported in `translator/index.js`.
 
 ## How to add

@@ -3,6 +3,7 @@
 ## Features
 - **Antigravity**: add an opt-in `antigravityBareModelRouting` setting (dashboard Profile toggle) that routes bare model ids found in the Antigravity catalog to an active Antigravity connection, picks effort variants for them on `/v1beta`, and lists them in `/v1/models`; aliases and same-named combos still win
 - **Usage**: log requests targeting missing, unroutable, or uncredentialed models to durable aggregated SQLite storage and display them under Dashboard Usage → Missing models tab with resolution and clearing controls
+- **Translator**: pass Gemini Google Search grounding through `/v1beta` `google_search` tools, Anthropic `web_search_*` server tools and OpenAI `web_search` tools on Gemini-family providers; sources return as `annotations` (`url_citation`), `grounding_metadata`, native `groundingMetadata` and Anthropic `server_tool_use` / `web_search_tool_result` blocks
 
 ## Fixes
 - **Combo**: stream the last combo candidate straight through instead of peeking it for content first — its result was returned regardless, and the peek held reasoning-then-tool-call turns (Gemini agent steps) until the stream ended, so clients saw time-to-first-token equal to total latency
