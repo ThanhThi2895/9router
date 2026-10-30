@@ -11,6 +11,7 @@ import { ensureStreamToolCallIds } from "../utils/streamHelpers.js";
 import { AntigravityExecutor } from "../executors/antigravity.js";
 import { PROVIDERS } from "../providers/index.js";
 import { ROLE, GEMINI_ROLE } from "./schema/roles.js";
+import { supportsWebSearchGrounding, withoutClaudeWebSearchTools, addHostedWebSearchTool } from "./concerns/webSearch.js";
 
 // Registry for translators. Lazy-init guards against circular-import order:
 // translator modules call register() (side-effect) before this module's body runs.
@@ -103,15 +104,26 @@ export function translateRequest(sourceFormat, targetFormat, model, body, stream
     // Direct route: if a translator is registered for this exact source:target
     // pair, use it instead of pivoting through OpenAI. This is lossless for
     // pairs like claude:kiro (avoids the claude->openai->kiro double-hop).
+
+    // Anthropic server web-search tools become a hosted search only for Gemini-family
+    // targets; every other target keeps the legacy translation untouched.
+    const claudeWebSearchBody = sourceFormat === FORMATS.CLAUDE && supportsWebSearchGrounding(targetFormat, provider, model)
+      ? withoutClaudeWebSearchTools(result) : null;
+    const claudeWebSearch = !!claudeWebSearchBody;
+    if (claudeWebSearchBody) result = claudeWebSearchBody;
+
     const directFn = requestRegistry.get(`${sourceFormat}:${targetFormat}`);
     if (directFn) {
       result = directFn(model, result, stream, credentials);
+      // claude:openai is itself a direct route (zed Gemini models take this path).
+      if (claudeWebSearch && targetFormat === FORMATS.OPENAI) addHostedWebSearchTool(result);
     } else {
       // Step 1: source -> openai (if source is not openai)
       if (sourceFormat !== FORMATS.OPENAI) {
         const toOpenAI = requestRegistry.get(`${sourceFormat}:${FORMATS.OPENAI}`);
         if (toOpenAI) {
           result = toOpenAI(model, result, stream, credentials);
+          if (claudeWebSearch) addHostedWebSearchTool(result);
           // Log OpenAI intermediate format
           reqLogger?.logOpenAIRequest?.(result);
         }

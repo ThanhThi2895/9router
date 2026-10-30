@@ -8,6 +8,7 @@ import { PROVIDERS } from "../../config/providers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { extractReasoningText } from "../../translator/concerns/reasoning.js";
+import { GROUNDING_FIELD } from "../../translator/concerns/grounding.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -135,6 +136,8 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
   const contentParts = [];
   const reasoningParts = [];
   const toolCallMap = new Map(); // index -> { id, type, function: { name, arguments } }
+  let annotations = [];
+  let groundingMetadata = null;
   let finishReason = "stop";
   let usage = null;
 
@@ -149,6 +152,9 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
     if (reasoningText.length > 0) reasoningParts.push(reasoningText);
     if (choice?.finish_reason) finishReason = choice.finish_reason;
     if (chunk?.usage && typeof chunk.usage === "object") usage = chunk.usage;
+    // Latest wins: a late grounding chunk repeats the finish chunk's citations.
+    if (Array.isArray(delta.annotations)) annotations = delta.annotations;
+    if (delta[GROUNDING_FIELD]) groundingMetadata = delta[GROUNDING_FIELD];
 
     // Accumulate tool_calls from streaming deltas
     if (Array.isArray(delta.tool_calls)) {
@@ -170,6 +176,8 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
   if (toolCallMap.size > 0) {
     message.tool_calls = [...toolCallMap.entries()].sort((a, b) => a[0] - b[0]).map(([, tc]) => tc);
   }
+  if (annotations.length > 0) message.annotations = annotations;
+  if (groundingMetadata) message[GROUNDING_FIELD] = groundingMetadata;
 
   const result = {
     id: first.id || `chatcmpl-${Date.now()}`,

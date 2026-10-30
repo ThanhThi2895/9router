@@ -1,5 +1,6 @@
 import { FORMATS } from "../formats.js";
 import { fromOpenAIFinish } from "./finishReason.js";
+import { GROUNDING_FIELD, groundingToClaudeBlocks, groundingQueryCount } from "./grounding.js";
 import { CLAUDE_BLOCK, MODEL_FALLBACK, RESPONSES_ITEM, ROLE } from "../schema/index.js";
 
 function parseToolArguments(value) {
@@ -22,6 +23,8 @@ export function openAICompletionToClaudeMessage(responseBody) {
   if (reasoning) {
     content.push({ type: CLAUDE_BLOCK.THINKING, thinking: reasoning });
   }
+  const grounding = message[GROUNDING_FIELD];
+  if (grounding) content.push(...groundingToClaudeBlocks(grounding));
   if (typeof message.content === "string" && message.content.length > 0) {
     content.push({ type: CLAUDE_BLOCK.TEXT, text: message.content });
   }
@@ -48,6 +51,7 @@ export function openAICompletionToClaudeMessage(responseBody) {
     usage: {
       input_tokens: usage.prompt_tokens || usage.input_tokens || 0,
       output_tokens: usage.completion_tokens || usage.output_tokens || 0,
+      ...(grounding && { server_tool_use: { web_search_requests: groundingQueryCount(grounding) } }),
     },
   };
 }

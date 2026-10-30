@@ -22,6 +22,7 @@ import { openaiToGeminiRequest } from "../translator/request/openai-to-gemini.js
 import { openaiToOpenAIResponsesRequest } from "../translator/request/openai-responses.js";
 import { claudeToOpenAIResponse } from "../translator/response/claude-to-openai.js";
 import { geminiToOpenAIResponse } from "../translator/response/gemini-to-openai.js";
+import { requestsWebSearch } from "../translator/concerns/webSearch.js";
 import { openaiResponsesToOpenAIResponse } from "../translator/response/openai-responses.js";
 import {
   ZED_HEADERS,
@@ -78,9 +79,10 @@ function buildProviderRequest(provider, model, body, stream, credentials) {
   return { ...(body || {}), model, stream: stream !== false };
 }
 
-function initProviderState(provider, model) {
+function initProviderState(provider, model, body) {
   if (provider === ZED_PROVIDER.anthropic) return initState(FORMATS.CLAUDE);
-  if (provider === ZED_PROVIDER.google) return initState(FORMATS.GEMINI);
+  // Gemini grounding can trail the finish; the translator holds the finish for it.
+  if (provider === ZED_PROVIDER.google) return { ...initState(FORMATS.GEMINI), webSearchRequested: requestsWebSearch(body) };
   if (provider === ZED_PROVIDER.openai) return initState(FORMATS.OPENAI_RESPONSES);
   const state = initState(FORMATS.OPENAI);
   state.model = model;
@@ -145,12 +147,12 @@ function normalizeStatus(status) {
   return null;
 }
 
-function wrapZedCompletionStream(response, provider, model) {
+function wrapZedCompletionStream(response, provider, model, body) {
   if (!response.ok || !response.body) return response;
 
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  const state = initProviderState(provider, model);
+  const state = initProviderState(provider, model, body);
   let buffer = "";
   let done = false;
 
@@ -272,7 +274,7 @@ class ZedExecutor extends BaseExecutor {
       },
     });
 
-    const wrapped = response.ok ? wrapZedCompletionStream(response, provider, model) : response;
+    const wrapped = response.ok ? wrapZedCompletionStream(response, provider, model, body) : response;
     return {
       response: wrapped,
       url: `${this.config?.llmBaseUrl || "https://cloud.zed.dev"}/completions`,

@@ -4,6 +4,7 @@ import { GEMINI_ROLE, OPENAI_FINISH, GEMINI_FINISH } from "../schema/index.js";
 import { getGeminiThoughtSignatureSync } from "../../services/thoughtSignatureStore.js";
 import { parseDataUri } from "../concerns/image.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
+import { GROUNDING_FIELD } from "../concerns/grounding.js";
 
 // Convert OpenAI SSE chunk to Antigravity SSE format
 // Real Antigravity format:
@@ -87,16 +88,20 @@ export function openaiToAntigravityResponse(chunk, state) {
     }
   }
 
-  // Skip empty non-finish chunks
-  if (parts.length === 0 && !finishReason) return null;
+  const grounding = delta[GROUNDING_FIELD];
+
+  // Skip empty non-finish chunks (a grounding-only chunk is not empty)
+  if (parts.length === 0 && !finishReason && !grounding) return null;
 
   // Ensure at least empty text part on finish with no content
-  if (parts.length === 0 && finishReason) {
+  if (parts.length === 0 && (finishReason || grounding)) {
     parts.push({ text: "" });
   }
 
   // Build candidate
   const candidate = { content: { role: GEMINI_ROLE.MODEL, parts } };
+
+  if (grounding) candidate.groundingMetadata = grounding;
 
   // Finish reason mapping
   if (finishReason) {

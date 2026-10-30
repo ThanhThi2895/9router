@@ -2,6 +2,7 @@ import { translateResponse, initState } from "../translator/index.js";
 import { FORMATS } from "../translator/formats.js";
 import { PROVIDERS } from "../config/providers.js";
 import { liftReasoningAliases } from "../translator/concerns/reasoning.js";
+import { requestsWebSearch } from "../translator/concerns/webSearch.js";
 import { trackPendingRequest, appendRequestLog } from "@/lib/usageDb.js";
 import { extractUsage, mergeUsage, hasValidUsage, estimateUsage, logUsage, addBufferToUsage, filterUsageForFormat, COLORS } from "./usageTracking.js";
 import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, ensureStreamToolCallIds } from "./streamHelpers.js";
@@ -80,7 +81,9 @@ export function createSSEStream(options = {}) {
         // hop of a pivot, and on the terminal null chunk the pivot drops it — so a
         // translator that defers closing events until flush needs to know which case
         // it is in. Absent/undefined means "unknown", i.e. do not defer.
-        targetFormat }
+        targetFormat,
+        // Gemini grounding can trail the finish; the response translator waits for it.
+        webSearchRequested: requestsWebSearch(body) }
     : null;
 
   let totalContentLength = 0;
@@ -146,6 +149,20 @@ export function createSSEStream(options = {}) {
       sseEmittedCount++;
     }
     finalizeStream();
+  };
+
+  // Finish chunk usage for the client: estimate when upstream sent none, else pad + filter.
+  // state.usage keeps the unpadded count for logging.
+  const applyFinishUsage = (item) => {
+    const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
+    if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
+      const estimated = estimateUsage(body, totalContentLength, sourceFormat);
+      item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
+      state.usage = estimated;
+    } else if (state.finishReason && isFinishChunk && state.usage) {
+      const buffered = addBufferToUsage(state.usage);
+      item.usage = filterUsageForFormat(buffered, sourceFormat);
+    }
   };
 
   return new TransformStream({
@@ -435,17 +452,7 @@ export function createSSEStream(options = {}) {
               continue; // Skip this empty chunk
             }
 
-            // Inject estimated usage if finish chunk has no valid usage
-            const isFinishChunk = item.type === "message_delta" || item.choices?.[0]?.finish_reason;
-            if (state.finishReason && isFinishChunk && !hasValidUsage(item.usage) && totalContentLength > 0) {
-              const estimated = estimateUsage(body, totalContentLength, sourceFormat);
-              item.usage = filterUsageForFormat(estimated, sourceFormat); // Filter + already has buffer
-              state.usage = estimated;
-            } else if (state.finishReason && isFinishChunk && state.usage) {
-              // Add buffer and filter usage for client (but keep original in state.usage for logging)
-              const buffered = addBufferToUsage(state.usage);
-              item.usage = filterUsageForFormat(buffered, sourceFormat);
-            }
+            applyFinishUsage(item);
 
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
@@ -550,6 +557,8 @@ export function createSSEStream(options = {}) {
         if (flushed?.length > 0) {
           for (const item of flushed) {
             if (item === null || item === undefined) continue;
+            // A finish held for trailing grounding is released here; same usage as in transform().
+            applyFinishUsage(item);
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));

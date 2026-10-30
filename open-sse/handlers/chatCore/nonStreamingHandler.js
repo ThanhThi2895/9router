@@ -14,6 +14,7 @@ import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
 import { ROLE, RESPONSES_ITEM, OPENAI_BLOCK, DEFAULT_IMAGE_MIME } from "../../translator/schema/index.js";
 import { encodeDataUri } from "../../translator/concerns/image.js";
+import { groundingFields } from "../../translator/concerns/grounding.js";
 
 /**
  * Convert an OpenAI Chat Completions non-streaming response body into the
@@ -150,6 +151,7 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
     if (toolCalls.length > 0) message.tool_calls = toolCalls;
     if (images.length > 0) message.images = images;
     if (!message.content && !message.tool_calls) message.content = "";
+    Object.assign(message, groundingFields(candidate.groundingMetadata));
 
     let finishReason = (candidate.finishReason || "stop").toLowerCase();
     if (finishReason === "stop" && toolCalls.length > 0) finishReason = "tool_calls";

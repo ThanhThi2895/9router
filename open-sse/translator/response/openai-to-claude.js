@@ -3,6 +3,7 @@ import { FORMATS } from "../formats.js";
 import { ROLE, CLAUDE_BLOCK, MODEL_FALLBACK } from "../schema/index.js";
 import { fromOpenAIFinish } from "../concerns/finishReason.js";
 import { extractReasoningText } from "../concerns/reasoning.js";
+import { GROUNDING_FIELD, groundingToClaudeBlocks, groundingQueryCount } from "../concerns/grounding.js";
 
 // Legacy "proxy_" prefix used by older request translators. Response strips it
 // defensively so tool names from such turns resolve back (e.g. proxy_Read → Read
@@ -65,6 +66,27 @@ function stopTextBlock(state, results) {
     index: state.textBlockIndex
   });
   state.textBlockStarted = false;
+}
+
+// Helper: emit buffered + sanitized args and stop every open tool_use block
+function stopToolBlocks(state, results) {
+  for (const [idx, toolInfo] of state.toolCalls) {
+    if (toolInfo.closed) continue;
+    toolInfo.closed = true;
+    const buffered = state.toolArgBuffers?.get(idx);
+    if (buffered) {
+      const sanitized = sanitizeToolArgs(toolInfo.name, buffered);
+      results.push({
+        type: "content_block_delta",
+        index: toolInfo.blockIndex,
+        delta: { type: "input_json_delta", partial_json: sanitized }
+      });
+    }
+    results.push({
+      type: "content_block_stop",
+      index: toolInfo.blockIndex
+    });
+  }
 }
 
 // Convert OpenAI stream chunk to Claude format
@@ -221,33 +243,44 @@ export function openaiToClaudeResponse(chunk, state) {
     }
   }
 
+  // Gemini search grounding -> Anthropic server_tool_use + web_search_tool_result
+  if (delta?.[GROUNDING_FIELD] && !state.webSearchEmitted) {
+    state.webSearchEmitted = true;
+    state.webSearchRequests = groundingQueryCount(delta[GROUNDING_FIELD]);
+    stopThinkingBlock(state, results);
+    stopTextBlock(state, results);
+    stopToolBlocks(state, results);
+    const [toolUse, toolResult] = groundingToClaudeBlocks(delta[GROUNDING_FIELD]);
+    const useIndex = state.nextBlockIndex++;
+    const { input, ...useStart } = toolUse;
+    results.push(
+      { type: "content_block_start", index: useIndex, content_block: { ...useStart, input: {} } },
+      { type: "content_block_delta", index: useIndex, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } },
+      { type: "content_block_stop", index: useIndex },
+    );
+    const resultIndex = state.nextBlockIndex++;
+    results.push(
+      { type: "content_block_start", index: resultIndex, content_block: toolResult },
+      { type: "content_block_stop", index: resultIndex },
+    );
+  }
+
   // Finish
   if (choice.finish_reason) {
     stopThinkingBlock(state, results);
     stopTextBlock(state, results);
 
-    for (const [idx, toolInfo] of state.toolCalls) {
-      // Emit buffered + sanitized args as single delta before stop
-      const buffered = state.toolArgBuffers?.get(idx);
-      if (buffered) {
-        const sanitized = sanitizeToolArgs(toolInfo.name, buffered);
-        results.push({
-          type: "content_block_delta",
-          index: toolInfo.blockIndex,
-          delta: { type: "input_json_delta", partial_json: sanitized }
-        });
-      }
-      results.push({
-        type: "content_block_stop",
-        index: toolInfo.blockIndex
-      });
-    }
+    stopToolBlocks(state, results);
 
     // Mark finish for later usage injection in stream.js
     state.finishReason = choice.finish_reason;
 
     // Use tracked usage (will be estimated in stream.js if not valid)
-    const finalUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
+    const baseUsage = state.usage || { input_tokens: 0, output_tokens: 0 };
+    const finalUsage = state.webSearchEmitted
+      ? { ...baseUsage, server_tool_use: { web_search_requests: state.webSearchRequests } }
+      : baseUsage;
+    if (state.webSearchEmitted) state.usage = finalUsage;
     results.push({
       type: "message_delta",
       delta: { stop_reason: convertFinishReason(choice.finish_reason) },

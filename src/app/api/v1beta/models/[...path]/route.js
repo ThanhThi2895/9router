@@ -522,6 +522,7 @@ async function convertOpenAIResponseToGemini(response, model) {
         content: images ? stripInlineImageMarkdown(message.content) : message.content,
         reasoning_content: message.reasoning_content,
         images,
+        grounding_metadata: message.grounding_metadata,
         tool_calls: message.tool_calls?.map((call, index) => ({ index, ...call })),
       },
       // A response with tool calls but no finish_reason would leave them buffered

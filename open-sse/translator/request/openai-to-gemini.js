@@ -21,6 +21,7 @@ import {
 } from "../formats/gemini.js";
 import { deriveSessionId, toNumericSessionId } from "../../utils/sessionManager.js";
 import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, CLAUDE_BLOCK } from "../schema/index.js";
+import { isHostedWebSearchTool, geminiToolGroups } from "../concerns/webSearch.js";
 import { isGemini4Model } from "../../providers/capabilities.js";
 
 // Sanitize function names for Gemini API.
@@ -280,9 +281,13 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
   // Convert tools
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const functionDeclarations = [];
+    let wantsSearch = false;
     for (const t of body.tools) {
+      if (isHostedWebSearchTool(t)) {
+        wantsSearch = true;
+      }
       // Check if already in Anthropic/Claude format (no type field, direct name/description/input_schema)
-      if (t.name && t.input_schema) {
+      else if (t.name && t.input_schema) {
         const cleanedSchema = cleanJSONSchemaForAntigravity(structuredClone(t.input_schema || { type: "object", properties: {} }));
         functionDeclarations.push({
           name: sanitizeGeminiFunctionName(t.name),
@@ -302,9 +307,8 @@ function openaiToGeminiBase(model, body, stream, signature = DEFAULT_THINKING_AG
       }
     }
 
-    if (functionDeclarations.length > 0) {
-      result.tools = [{ functionDeclarations }];
-    }
+    const groups = geminiToolGroups(functionDeclarations, wantsSearch);
+    if (groups.length > 0) result.tools = groups;
   }
 
   result.contents = normalizeGeminiContents(result.contents, model);
@@ -367,7 +371,7 @@ function wrapInCloudCodeEnvelope(model, geminiCLI, credentials = null, isAntigra
     envelope.request.safetySettings = geminiCLI.safetySettings;
   }
 
-  if (geminiCLI.tools?.length > 0) {
+  if (geminiCLI.tools?.some(g => g.functionDeclarations?.length > 0)) {
     envelope.request.toolConfig = {
       functionCallingConfig: { mode: "VALIDATED" }
     };

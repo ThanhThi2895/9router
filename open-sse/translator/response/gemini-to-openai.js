@@ -6,6 +6,7 @@ import { toOpenAIUsage } from "../concerns/usage.js";
 import { reasoningDelta } from "../concerns/reasoning.js";
 import { encodeDataUri } from "../concerns/image.js";
 import { toOpenAIFinish } from "../concerns/finishReason.js";
+import { groundingFields } from "../concerns/grounding.js";
 import { storeGeminiThoughtSignature } from "../../services/thoughtSignatureStore.js";
 
 // Build chunk meta for current gemini state
@@ -37,9 +38,19 @@ function emitFunctionCall(functionCall, state, signature = null) {
   return buildChunk(chunkMeta(state), { tool_calls: [toolCall] }, null);
 }
 
+// Release a finish chunk held back for grounding, with the grounding if it came.
+function releaseHeldFinish(state) {
+  const finalChunk = state.heldFinishChunk;
+  state.heldFinishChunk = null;
+  Object.assign(finalChunk.choices[0].delta, groundingFields(state.groundingMetadata));
+  state.groundingMetadata = null;
+  return finalChunk;
+}
+
 // Convert Gemini response chunk to OpenAI format
 export function geminiToOpenAIResponse(chunk, state) {
-  if (!chunk) return null;
+  // End of stream: a finish still held for grounding goes out without it.
+  if (!chunk) return state?.heldFinishChunk ? [releaseHeldFinish(state)] : null;
   
   // Handle Antigravity wrapper
   const response = chunk.response || chunk;
@@ -134,6 +145,19 @@ export function geminiToOpenAIResponse(chunk, state) {
   const geminiUsage = toOpenAIUsage(usageMeta, "gemini");
   if (geminiUsage) state.usage = geminiUsage;
 
+  // Grounding: latest wins, attached once (finish chunk), or alone if it trails the finish.
+  const grounding = candidate.groundingMetadata;
+  if (grounding) state.groundingMetadata = grounding;
+  if (state.heldFinishChunk) {
+    if (geminiUsage) state.heldFinishChunk.usage = state.usage;
+    if (grounding) results.push(releaseHeldFinish(state));
+    return results.length > 0 ? results : null;
+  }
+  if (grounding && state.finishReason && !candidate.finishReason) {
+    results.push(buildChunk(chunkMeta(state), groundingFields(grounding), null));
+    state.groundingMetadata = null;
+  }
+
   // Finish reason - include usage in final chunk
   if (candidate.finishReason) {
     let finishReason = toOpenAIFinish(candidate.finishReason, "gemini");
@@ -148,8 +172,11 @@ export function geminiToOpenAIResponse(chunk, state) {
       finalChunk.usage = state.usage;
     }
     
-    results.push(finalChunk);
     state.finishReason = finishReason;
+    // A search request can get its grounding after the finish: hold the finish until
+    // the grounding (or the end of the stream) so every client sees sources before it.
+    state.heldFinishChunk = finalChunk;
+    if (state.groundingMetadata || !state.webSearchRequested) results.push(releaseHeldFinish(state));
   }
 
   return results.length > 0 ? results : null;

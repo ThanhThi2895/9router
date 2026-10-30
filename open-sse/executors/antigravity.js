@@ -8,6 +8,7 @@ import { proxyAwareFetch } from "../utils/proxyFetch.js";
 import { cleanJSONSchemaForAntigravity, normalizeGeminiContents, functionDeclarationSchema } from "../translator/formats/gemini.js";
 import { DEFAULT_THINKING_AG_SIGNATURE } from "../config/defaultThinkingSignature.js";
 import { getGeminiThoughtSignatureSync } from "../services/thoughtSignatureStore.js";
+import { isGeminiSearchTool, geminiToolGroups } from "../translator/concerns/webSearch.js";
 
 // Sanitize function name: Gemini requires [a-zA-Z_][a-zA-Z0-9_.:\-]{0,63}
 function sanitizeFunctionName(name) {
@@ -289,7 +290,12 @@ export class AntigravityExecutor extends BaseExecutor {
       // Merge all groups into a single functionDeclarations group (Gemini expects 1 group)
       const seenToolNames = new Set();
       const allDeclarations = [];
+      let wantsSearch = false;
       for (const group of tools) {
+        if (isGeminiSearchTool(group)) {
+          wantsSearch = true;
+          continue;
+        }
         for (const fn of group.functionDeclarations || []) {
           const name = sanitizeFunctionName(fn.name);
           if (seenToolNames.has(name)) continue;
@@ -306,7 +312,7 @@ export class AntigravityExecutor extends BaseExecutor {
           });
         }
       }
-      tools = allDeclarations.length > 0 ? [{ functionDeclarations: allDeclarations }] : [];
+      tools = geminiToolGroups(allDeclarations, wantsSearch);
     }
 
     // Strip tools/toolConfig (handled separately) and blacklisted fields that Google rejects
@@ -336,7 +342,7 @@ export class AntigravityExecutor extends BaseExecutor {
       ...(tools && { tools }),
       sessionId,
       safetySettings: undefined,
-      ...(tools?.length > 0 && { toolConfig: { functionCallingConfig: { mode: "VALIDATED" } } })
+      ...(tools?.some(g => g.functionDeclarations?.length > 0) && { toolConfig: { functionCallingConfig: { mode: "VALIDATED" } } })
     };
 
     // Strip blacklisted thinking fields from top-level body (set by thinkingUnified.js at root, not body.request)

@@ -3,7 +3,8 @@ import { FORMATS } from "../formats.js";
 import { adjustMaxTokens } from "../formats/maxTokens.js";
 import { encodeDataUri } from "../concerns/image.js";
 import { collapseTextParts } from "../concerns/message.js";
-import { ROLE, GEMINI_ROLE, OPENAI_BLOCK } from "../schema/index.js";
+import { ROLE, GEMINI_ROLE, OPENAI_BLOCK, OPENAI_HOSTED_TOOL } from "../schema/index.js";
+import { isGeminiSearchTool } from "../concerns/webSearch.js";
 import { functionDeclarationSchema } from "../formats/gemini.js";
 
 // Convert Gemini request to OpenAI format
@@ -53,7 +54,12 @@ export function geminiToOpenAIRequest(model, body, stream) {
   // Tools
   if (body.tools && Array.isArray(body.tools)) {
     result.tools = [];
+    let hasSearch = false;
     for (const tool of body.tools) {
+      if (!hasSearch && isGeminiSearchTool(tool)) {
+        hasSearch = true;
+        result.tools.push({ type: OPENAI_HOSTED_TOOL.WEB_SEARCH });
+      }
       if (tool.functionDeclarations) {
         for (const func of tool.functionDeclarations) {
           result.tools.push({

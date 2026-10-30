@@ -11,6 +11,21 @@ export const OPENAI_BLOCK = {
   FUNCTION: "function",
 };
 
+// OpenAI hosted (provider-run) tool types.
+export const OPENAI_HOSTED_TOOL = {
+  WEB_SEARCH: "web_search",
+  WEB_SEARCH_PREVIEW: "web_search_preview",
+};
+
+// Gemini native search-grounding tool keys.
+export const GEMINI_TOOL = {
+  GOOGLE_SEARCH: "googleSearch",
+  GOOGLE_SEARCH_SNAKE: "google_search",
+};
+
+// Anthropic server web-search tool types are `web_search_YYYYMMDD`.
+export const CLAUDE_WEB_SEARCH_TYPE_PREFIX = "web_search_";
+
 // CommandCode native content blocks.
 export const COMMANDCODE_BLOCK = {
   TOOL_CALL: "tool-call",
@@ -29,6 +44,13 @@ export const CLAUDE_BLOCK = {
   REDACTED_THINKING: "redacted_thinking",
   SERVER_TOOL_USE: "server_tool_use",
   WEB_SEARCH_TOOL_RESULT: "web_search_tool_result",
+};
+
+// Anthropic server web-search block vocabulary.
+export const CLAUDE_WEB_SEARCH = {
+  TOOL_NAME: "web_search",
+  RESULT_ITEM: "web_search_result",
+  TOOL_USE_ID_PREFIX: "srvtoolu_",
 };
 
 // OpenAI Responses API item types.
