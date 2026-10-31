@@ -46,6 +46,8 @@ export function hasValuableContent(chunk, format) {
     return delta.content && delta.content !== "" ||
            delta.reasoning_content && delta.reasoning_content !== "" ||
            delta.tool_calls && delta.tool_calls.length > 0 ||
+           delta.grounding_metadata ||
+           delta.annotations && delta.annotations.length > 0 ||
            chunk.choices[0].finish_reason ||
            delta.role;
   }
