@@ -14,10 +14,13 @@ export const SSE_HEADERS_NO_BUFFER = {
   "X-Accel-Buffering": "no"
 };
 
-// Variant for client-facing SSE responses (adds permissive CORS)
+// Variant for client-facing SSE responses (adds permissive CORS).
+// X-Accel-Buffering stops an nginx reverse proxy (default proxy_buffering on)
+// from holding the stream until its buffers fill or the response ends.
 export const SSE_HEADERS_CORS = {
   "Content-Type": "text/event-stream",
   "Cache-Control": "no-cache",
   "Connection": "keep-alive",
+  "X-Accel-Buffering": "no",
   "Access-Control-Allow-Origin": "*"
 };
