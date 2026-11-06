@@ -117,11 +117,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // on/off → extended type (body.thinking), none/low/medium/high → effort type (body.reasoning_effort)
   if (providerThinking?.mode && providerThinking.mode !== "auto") {
     const mode = providerThinking.mode;
-    if (mode === "on" && !body.thinking) {
-      console.log("Injecting provider-level thinking config override: on");
-      body = { ...body, thinking: { type: "enabled", budget_tokens: 10000 } };
-    } else if (mode === "off" && !body.thinking) {
-      body = { ...body, thinking: { type: "disabled" } };
+    // on/off are switches, not effort levels: when the client already sent
+    // `thinking` they must leave the body alone. Falling through would write
+    // reasoning_effort "on"/"off", which outranks the client's thinking and
+    // resolves to a no-thoughts config (e.g. Gemini minimal, includeThoughts:false).
+    if (mode === "on" || mode === "off") {
+      if (!body.thinking) {
+        if (mode === "on") console.log("Injecting provider-level thinking config override: on");
+        body = { ...body, thinking: mode === "on" ? { type: "enabled", budget_tokens: 10000 } : { type: "disabled" } };
+      }
     } else if (!body.reasoning_effort) {
       body = { ...body, reasoning_effort: mode };
     }
