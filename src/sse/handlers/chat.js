@@ -20,7 +20,8 @@ import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "o
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
-import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
+import { withSseKeepalive } from "open-sse/utils/sseKeepalive.js";
+import { detectFormatByEndpoint, FORMATS } from "open-sse/translator/formats.js";
 import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
@@ -34,8 +35,24 @@ import { resolveSmartChoice } from "../services/systemoneRouter.js";
  * Handle chat completion request
  * Supports: OpenAI, Claude, Gemini, OpenAI Responses API formats
  * Format detection and translation handled by translator
+ *
+ * With `{ keepalive: true }`, requests that explicitly ask for `stream: true` get
+ * their SSE status/headers committed immediately and `: ping` comments while the
+ * upstream is still silent (see withSseKeepalive). Everything else is untouched.
  */
-export async function handleChat(request, clientRawRequest = null) {
+export async function handleChat(request, clientRawRequest = null, { keepalive = false } = {}) {
+  if (keepalive) {
+    let peek = null;
+    try { peek = await request.clone().json(); } catch { /* handleChatInner reports invalid JSON */ }
+    if (peek?.stream === true) {
+      const errorFormat = detectFormatByEndpoint(new URL(request.url).pathname, peek) || FORMATS.OPENAI;
+      return withSseKeepalive(handleChatInner(request, clientRawRequest), { errorFormat });
+    }
+  }
+  return handleChatInner(request, clientRawRequest);
+}
+
+async function handleChatInner(request, clientRawRequest = null) {
   let body;
   try {
     body = await request.json();

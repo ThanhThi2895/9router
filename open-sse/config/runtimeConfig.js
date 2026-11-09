@@ -55,6 +55,11 @@ export const STREAM_STALL_TIMEOUT_MS = envMs("STREAM_STALL_TIMEOUT_MS", 360 * 10
 // Time-to-first-token timeout (prompt prefill). Env: STREAM_FIRST_CHUNK_TIMEOUT_MS.
 export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_MS", 200 * 1000);
 
+// SSE keepalive: idle gap before a ": ping" comment is sent to streaming clients so
+// reverse proxies / CDNs (nginx 60 s, Cloudflare 100 s) never see a silent origin
+// during prompt prefill. Env: SSE_KEEPALIVE_INTERVAL_MS.
+export const SSE_KEEPALIVE_INTERVAL_MS = envMs("SSE_KEEPALIVE_INTERVAL_MS", 15 * 1000);
+
 // Combo empty-content failover: how long a 2xx stream may be held while waiting for its first
 // content-bearing frame before committing to that model (fail-open on expiry).
 // Env: EMPTY_PEEK_DEADLINE_MS.
