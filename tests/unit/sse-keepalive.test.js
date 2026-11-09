@@ -133,4 +133,28 @@ describe("withSseKeepalive", () => {
     expect(committed.headers.get("content-type")).toBe("text/event-stream");
     resolve(sseResponse(new ReadableStream({ start(c) { c.close(); } })));
   });
+
+  it("keeps status/headers of a fast 2xx SSE response and pings its later silent gaps", async () => {
+    vi.useFakeTimers();
+    const up = controlled();
+    const inner = new Response(up.stream, { status: 200, headers: { "Content-Type": "text/event-stream", "x-ratelimit-remaining": "42" } });
+    const res = await withSseKeepalive(Promise.resolve(inner), { intervalMs: 15000, commitDelayMs: 10000 });
+    expect(res).not.toBe(inner);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-remaining")).toBe("42");
+    const done = drain(res);
+    up.push('data: {"a":1}\n\n');
+    await vi.advanceTimersByTimeAsync(31000);
+    up.push('data: {"a":2}\n\n');
+    up.close();
+    const out = await done;
+    expect(out.startsWith('data: {"a":1}\n\n')).toBe(true); // no synthetic initial ping
+    const between = out.slice(out.indexOf('{"a":1}'), out.indexOf('{"a":2}'));
+    expect(between).toContain(": ping\n\n");
+  });
+
+  it("returns a fast 5xx SSE-typed error response unchanged", async () => {
+    const inner = new Response("x", { status: 503, headers: { "Content-Type": "text/event-stream" } });
+    expect(await withSseKeepalive(Promise.resolve(inner), { commitDelayMs: 10000 })).toBe(inner);
+  });
 });

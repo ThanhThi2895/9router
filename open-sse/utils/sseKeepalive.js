@@ -17,7 +17,8 @@ const CR = 13;
  * cover both the wait before the inner Response exists (upstream prefill) and any
  * long silent gap after it.
  *
- * Only a response slower than the grace window loses its real status: its failure is
+ * A 2xx SSE response that resolves in time keeps its status/headers and is still pinged
+ * during later silent gaps. Only a response slower than the grace window loses its real status: its failure is
  * then delivered as an in-stream error event (shape chosen by `errorFormat`).
  *
  * @param {Promise<Response>} resultPromise - resolves to the real handler response
@@ -37,12 +38,24 @@ export async function withSseKeepalive(resultPromise, { errorFormat, intervalMs 
   } finally {
     clearTimeout(graceTimer);
   }
-  if (settled !== PENDING) return settled;
-  return commitSse(resultPromise, { errorFormat, intervalMs });
+  if (settled === PENDING) return commitSse(resultPromise, { errorFormat, intervalMs });
+  // Resolved in time: errors/JSON pass through untouched; a 2xx SSE keeps its own
+  // status and headers but still gets idle pings for later silent gaps.
+  if (isSse(settled) && settled.ok) {
+    return commitSse(Promise.resolve(settled), {
+      errorFormat, intervalMs, initialPing: false,
+      init: { status: settled.status, statusText: settled.statusText, headers: settled.headers },
+    });
+  }
+  return settled;
+}
+
+function isSse(response) {
+  return !!response?.body && (response.headers?.get("content-type") || "").toLowerCase().includes("text/event-stream");
 }
 
 /** Commit immediately (no grace window). Exported for stream-mechanics tests. */
-export function commitSse(resultPromise, { errorFormat, intervalMs }) {
+export function commitSse(resultPromise, { errorFormat, intervalMs, initialPing = true, init = null }) {
   let timer = null;
   let cancelled = false;
   let reader = null;
@@ -71,7 +84,7 @@ export function commitSse(resultPromise, { errorFormat, intervalMs }) {
       };
 
       // Flushes status + headers through the proxy chain right away.
-      write(PING);
+      if (initialPing) write(PING);
       if (intervalMs > 0) {
         timer = setInterval(() => {
           if (Date.now() - lastWriteAt >= intervalMs && atBoundary()) write(PING);
@@ -120,5 +133,5 @@ export function commitSse(resultPromise, { errorFormat, intervalMs }) {
     },
   });
 
-  return new Response(body, { status: 200, headers: SSE_HEADERS_CORS });
+  return new Response(body, init || { status: 200, headers: SSE_HEADERS_CORS });
 }
