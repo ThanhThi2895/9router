@@ -1,6 +1,6 @@
 import { SSE_HEADERS_CORS } from "./sseConstants.js";
 import { buildStreamErrorBytes } from "./streamHelpers.js";
-import { SSE_KEEPALIVE_INTERVAL_MS } from "../config/runtimeConfig.js";
+import { SSE_KEEPALIVE_INTERVAL_MS, SSE_KEEPALIVE_COMMIT_DELAY_MS } from "../config/runtimeConfig.js";
 
 const encoder = new TextEncoder();
 const PING = encoder.encode(": ping\n\n");
@@ -8,23 +8,41 @@ const LF = 10;
 const CR = 13;
 
 /**
- * Commit SSE status + headers to the client immediately and keep the connection
- * warm with `: ping` comments while the real response is still being produced.
+ * Hold the real response for a grace window; if it resolves in time, return it
+ * unchanged. Otherwise commit SSE status + headers and keep the connection warm
+ * with `: ping` comments while the real response is still being produced.
  *
  * Pings are SSE comments (ignored by every SSE parser) and are only written on an
  * event boundary, so they can never land inside a partially delivered event. They
  * cover both the wait before the inner Response exists (upstream prefill) and any
  * long silent gap after it.
  *
- * Trade-off: the HTTP status is already 200 when the inner result is known, so a
- * failure is delivered as an in-stream error event (shape chosen by `errorFormat`).
+ * Only a response slower than the grace window loses its real status: its failure is
+ * then delivered as an in-stream error event (shape chosen by `errorFormat`).
  *
  * @param {Promise<Response>} resultPromise - resolves to the real handler response
  * @param {object} [opts]
  * @param {string} [opts.errorFormat] - client format used to shape in-stream errors
  * @param {number} [opts.intervalMs] - idle gap before a ping (default SSE_KEEPALIVE_INTERVAL_MS)
+ * @param {number} [opts.commitDelayMs] - grace window before committing (default SSE_KEEPALIVE_COMMIT_DELAY_MS)
+ * @returns {Promise<Response>}
  */
-export function withSseKeepalive(resultPromise, { errorFormat, intervalMs = SSE_KEEPALIVE_INTERVAL_MS } = {}) {
+export async function withSseKeepalive(resultPromise, { errorFormat, intervalMs = SSE_KEEPALIVE_INTERVAL_MS, commitDelayMs = SSE_KEEPALIVE_COMMIT_DELAY_MS } = {}) {
+  const PENDING = Symbol("pending");
+  let graceTimer;
+  const grace = new Promise((resolve) => { graceTimer = setTimeout(() => resolve(PENDING), commitDelayMs); });
+  let settled;
+  try {
+    settled = await Promise.race([resultPromise, grace]);
+  } finally {
+    clearTimeout(graceTimer);
+  }
+  if (settled !== PENDING) return settled;
+  return commitSse(resultPromise, { errorFormat, intervalMs });
+}
+
+/** Commit immediately (no grace window). Exported for stream-mechanics tests. */
+export function commitSse(resultPromise, { errorFormat, intervalMs }) {
   let timer = null;
   let cancelled = false;
   let reader = null;

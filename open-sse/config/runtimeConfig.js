@@ -60,6 +60,11 @@ export const STREAM_FIRST_CHUNK_TIMEOUT_MS = envMs("STREAM_FIRST_CHUNK_TIMEOUT_M
 // during prompt prefill. Env: SSE_KEEPALIVE_INTERVAL_MS.
 export const SSE_KEEPALIVE_INTERVAL_MS = envMs("SSE_KEEPALIVE_INTERVAL_MS", 15 * 1000);
 
+// Grace window before an SSE response is committed with a synthetic 200. A response that
+// resolves inside it keeps its real status/headers (429/502 retries, rate-limit headers);
+// only slower ones are committed and pinged. Env: SSE_KEEPALIVE_COMMIT_DELAY_MS.
+export const SSE_KEEPALIVE_COMMIT_DELAY_MS = envMs("SSE_KEEPALIVE_COMMIT_DELAY_MS", 10 * 1000);
+
 // Combo empty-content failover: how long a 2xx stream may be held while waiting for its first
 // content-bearing frame before committing to that model (fail-open on expiry).
 // Env: EMPTY_PEEK_DEADLINE_MS.

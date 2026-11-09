@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { withSseKeepalive } from "../../open-sse/utils/sseKeepalive.js";
+import { withSseKeepalive, commitSse } from "../../open-sse/utils/sseKeepalive.js";
 import { FORMATS } from "../../open-sse/translator/formats.js";
 
 const enc = new TextEncoder();
@@ -26,7 +26,7 @@ afterEach(() => vi.useRealTimers());
 
 describe("withSseKeepalive", () => {
   it("returns 200 SSE headers and an initial ping before the inner result resolves", async () => {
-    const res = withSseKeepalive(new Promise(() => {}), { intervalMs: 15000 });
+    const res = commitSse(new Promise(() => {}), { intervalMs: 15000 });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/event-stream");
     expect(res.headers.get("x-accel-buffering")).toBe("no");
@@ -38,7 +38,7 @@ describe("withSseKeepalive", () => {
     vi.useFakeTimers();
     let resolve;
     const inner = new Promise((r) => { resolve = r; });
-    const res = withSseKeepalive(inner, { intervalMs: 15000 });
+    const res = commitSse(inner, { intervalMs: 15000 });
     const done = drain(res);
 
     await vi.advanceTimersByTimeAsync(46000);
@@ -57,7 +57,7 @@ describe("withSseKeepalive", () => {
   it("pings during a long silent gap after the first chunk", async () => {
     vi.useFakeTimers();
     const up = controlled();
-    const res = withSseKeepalive(Promise.resolve(sseResponse(up.stream)), { intervalMs: 15000 });
+    const res = commitSse(Promise.resolve(sseResponse(up.stream)), { intervalMs: 15000 });
     const done = drain(res);
     await vi.advanceTimersByTimeAsync(0);
     up.push('data: {"a":1}\n\n');
@@ -72,7 +72,7 @@ describe("withSseKeepalive", () => {
   it("never injects a ping inside a partially delivered event", async () => {
     vi.useFakeTimers();
     const up = controlled();
-    const res = withSseKeepalive(Promise.resolve(sseResponse(up.stream)), { intervalMs: 15000 });
+    const res = commitSse(Promise.resolve(sseResponse(up.stream)), { intervalMs: 15000 });
     const done = drain(res);
     await vi.advanceTimersByTimeAsync(0);
     up.push('data: {"par');
@@ -85,13 +85,13 @@ describe("withSseKeepalive", () => {
 
   it("turns an error response into an in-stream OpenAI error event", async () => {
     const err = new Response(JSON.stringify({ error: { message: "quota exhausted" } }), { status: 429, headers: { "Content-Type": "application/json" } });
-    const out = await drain(withSseKeepalive(Promise.resolve(err), { intervalMs: 15000 }));
+    const out = await drain(commitSse(Promise.resolve(err), { intervalMs: 15000 }));
     expect(out).toContain("quota exhausted");
     expect(out).toContain("data: [DONE]");
   });
 
   it("shapes errors as a Claude error event for Claude clients", async () => {
-    const out = await drain(withSseKeepalive(Promise.reject(new Error("boom")), { intervalMs: 15000, errorFormat: FORMATS.CLAUDE }));
+    const out = await drain(commitSse(Promise.reject(new Error("boom")), { intervalMs: 15000, errorFormat: FORMATS.CLAUDE }));
     expect(out).toContain('"type":"error"');
     expect(out).toContain("boom");
   });
@@ -99,11 +99,38 @@ describe("withSseKeepalive", () => {
   it("cancels the inner stream when the client disconnects", async () => {
     const cancel = vi.fn();
     const inner = new ReadableStream({ start() {}, cancel });
-    const res = withSseKeepalive(Promise.resolve(sseResponse(inner)), { intervalMs: 15000 });
+    const res = commitSse(Promise.resolve(sseResponse(inner)), { intervalMs: 15000 });
     const reader = res.body.getReader();
     await reader.read(); // initial ping
     await new Promise((r) => setTimeout(r, 0));
     await reader.cancel();
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it("returns a fast inner response unchanged (real status and headers)", async () => {
+    const inner = new Response('{"error":{"message":"slow down"}}', { status: 429, headers: { "Content-Type": "application/json", "retry-after": "7" } });
+    const res = await withSseKeepalive(Promise.resolve(inner), { intervalMs: 15000, commitDelayMs: 10000 });
+    expect(res).toBe(inner);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("7");
+  });
+
+  it("propagates a rejection that happens inside the grace window", async () => {
+    await expect(withSseKeepalive(Promise.reject(new Error("early")), { commitDelayMs: 10000 })).rejects.toThrow("early");
+  });
+
+  it("commits 200 + SSE only after the grace window elapses", async () => {
+    vi.useFakeTimers();
+    let resolve;
+    const inner = new Promise((r) => { resolve = r; });
+    let committed = null;
+    const p = withSseKeepalive(inner, { intervalMs: 15000, commitDelayMs: 10000 }).then((r) => { committed = r; });
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(committed).toBeNull();
+    await vi.advanceTimersByTimeAsync(1500);
+    await p;
+    expect(committed.status).toBe(200);
+    expect(committed.headers.get("content-type")).toBe("text/event-stream");
+    resolve(sseResponse(new ReadableStream({ start(c) { c.close(); } })));
   });
 });

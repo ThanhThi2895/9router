@@ -23,12 +23,10 @@ describe("handleChat keepalive", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
   });
 
-  it("commits SSE headers for stream:true and delivers the error in-stream", async () => {
+  it("keeps the real status for a fast stream:true failure inside the grace window", async () => {
     const res = await handleChat(req({ stream: true }), null, { keepalive: true });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("text/event-stream");
-    const text = await res.text();
-    expect(text.startsWith(": ping\n\n")).toBe(true);
-    expect(text).toContain("Missing model");
+    expect(res.status).toBe(400);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect((await res.json()).error.message).toBe("Missing model");
   });
 });
