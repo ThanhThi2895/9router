@@ -19,7 +19,7 @@ import { upstreamResponseHeaders } from "open-sse/utils/upstreamHeaders.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
-import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
+import { HTTP_STATUS, SSE_KEEPALIVE_COMMIT_DELAY_MS, SSE_RETRY_DEADLINE_MARGIN_MS } from "open-sse/config/runtimeConfig.js";
 import { withSseKeepalive } from "open-sse/utils/sseKeepalive.js";
 import { detectFormatByEndpoint, FORMATS } from "open-sse/translator/formats.js";
 import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
@@ -46,13 +46,15 @@ export async function handleChat(request, clientRawRequest = null, { keepalive =
     try { peek = await request.clone().json(); } catch { /* handleChatInner reports invalid JSON */ }
     if (peek?.stream === true) {
       const errorFormat = detectFormatByEndpoint(new URL(request.url).pathname, peek) || FORMATS.OPENAI;
-      return withSseKeepalive(handleChatInner(request, clientRawRequest), { errorFormat });
+      // Executor retries must not sleep past the SSE commit, or the real 503 can no longer be sent.
+      const retryDeadline = Date.now() + SSE_KEEPALIVE_COMMIT_DELAY_MS - SSE_RETRY_DEADLINE_MARGIN_MS;
+      return withSseKeepalive(handleChatInner(request, clientRawRequest, { retryDeadline }), { errorFormat });
     }
   }
   return handleChatInner(request, clientRawRequest);
 }
 
-async function handleChatInner(request, clientRawRequest = null) {
+async function handleChatInner(request, clientRawRequest = null, { retryDeadline = null } = {}) {
   let body;
   try {
     body = await request.json();
@@ -148,7 +150,7 @@ async function handleChatInner(request, clientRawRequest = null) {
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, null, { retryDeadline });
         },
         log,
         comboName: modelStr,
@@ -164,11 +166,12 @@ async function handleChatInner(request, clientRawRequest = null) {
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, null, { retryDeadline }),
         adapterAdded
       ),
       log,
       comboName: modelStr,
+      retryDeadline,
       comboStrategy,
       comboStickyLimit,
       sessionId,
@@ -196,22 +199,23 @@ async function handleChatInner(request, clientRawRequest = null) {
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, null, { retryDeadline }),
         adapterAdded
       ),
       log,
       comboName: modelStr,
+      retryDeadline,
       comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings)
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null, modelInfo);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null, modelInfo, { retryDeadline });
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, resolvedModelInfo = null) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, resolvedModelInfo = null, { retryDeadline = null } = {}) {
   const modelInfo = resolvedModelInfo || await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -241,7 +245,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, null, { retryDeadline });
           },
           log,
           comboName: modelStr,
@@ -259,11 +263,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, null, { retryDeadline }),
           adapterAdded
         ),
         log,
         comboName: modelStr,
+        retryDeadline,
         comboStrategy,
         comboStickyLimit,
         sessionId: nestedSessionId,
@@ -342,6 +347,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
     const result = await handleChatCore({
+      // Only providers opted in here stop retrying at the SSE commit deadline.
+      retryDeadline: provider === "antigravity" ? retryDeadline : null,
       body: { ...body, model: `${provider}/${model}` },
       modelInfo: { provider, model },
       credentials: refreshedCredentials,

@@ -129,9 +129,38 @@ export const MODEL_LOCK_PREFIX = "modelLock_";
 /** Special key used when no model is known (account-level lock) */
 export const MODEL_LOCK_ALL = `${MODEL_LOCK_PREFIX}__all`;
 
+/**
+ * Prefix for the error stored next to a model lock (`modelLockError_<model>`).
+ * Deliberately not a match for MODEL_LOCK_PREFIX, so lock scanners ignore it.
+ */
+export const MODEL_LOCK_ERROR_PREFIX = "modelLockError_";
+
 /** Build the flat field key for a model lock */
 export function getModelLockKey(model) {
   return model ? `${MODEL_LOCK_PREFIX}${model}` : MODEL_LOCK_ALL;
+}
+
+/** Build the flat field key holding the error that caused a model lock */
+export function getModelLockErrorKey(model) {
+  return `${MODEL_LOCK_ERROR_PREFIX}${model || "__all"}`;
+}
+
+/**
+ * Get the active lock expiry that applies to `model` on a connection: the later of
+ * `modelLock_<model>` and `modelLock___all`. Matches what isModelLockActive treats as locked.
+ * @returns {string|null} ISO timestamp, or null when no lock is active
+ */
+export function getModelLockUntil(connection, model) {
+  if (!connection) return null;
+  const now = Date.now();
+  let latest = null;
+  for (const key of new Set([getModelLockKey(model), MODEL_LOCK_ALL])) {
+    const val = connection[key];
+    if (!val) continue;
+    const t = new Date(val).getTime();
+    if (t > now && (!latest || t > latest)) latest = t;
+  }
+  return latest ? new Date(latest).toISOString() : null;
 }
 
 /**
@@ -164,10 +193,14 @@ export function getEarliestModelLockUntil(connection) {
 
 /**
  * Build update object to set a model lock on a connection.
+ * @param {string|null} model
+ * @param {number} cooldownMs
+ * @param {{message: string, status: number}|null} error - stored as modelLockError_<model>
  */
-export function buildModelLockUpdate(model, cooldownMs) {
-  const key = getModelLockKey(model);
-  return { [key]: new Date(Date.now() + cooldownMs).toISOString() };
+export function buildModelLockUpdate(model, cooldownMs, error = null) {
+  const update = { [getModelLockKey(model)]: new Date(Date.now() + cooldownMs).toISOString() };
+  if (error) update[getModelLockErrorKey(model)] = error;
+  return update;
 }
 
 /**
@@ -176,7 +209,7 @@ export function buildModelLockUpdate(model, cooldownMs) {
 export function buildClearModelLocksUpdate(connection) {
   const cleared = {};
   for (const key of Object.keys(connection)) {
-    if (key.startsWith(MODEL_LOCK_PREFIX)) cleared[key] = null;
+    if (key.startsWith(MODEL_LOCK_PREFIX) || key.startsWith(MODEL_LOCK_ERROR_PREFIX)) cleared[key] = null;
   }
   return cleared;
 }

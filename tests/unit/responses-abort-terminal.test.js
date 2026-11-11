@@ -97,6 +97,7 @@ describe("buildStreamErrorBytes", () => {
       message: "stream stall timeout",
       type: "server_error",
       code: "gateway_timeout",
+      status: 504,
     });
   });
 

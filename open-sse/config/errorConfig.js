@@ -70,6 +70,9 @@ export const ERROR_RULES = [
   { text: "quota exceeded",           backoff: true },
   { text: "insufficient credit",      backoff: true },
   { text: "credit balance is too low", backoff: true },
+  // Google capacity exhaustion is a short, model-wide condition, not an account fault, so it must not escalate the account's backoff.
+  { provider: "antigravity", text: "model_capacity_exhausted", cooldownMs: COOLDOWN.short },
+  { provider: "antigravity", text: "no capacity available", cooldownMs: COOLDOWN.short },
   { text: "capacity",                 backoff: true },
   { text: "overloaded",               backoff: true },
 

@@ -365,6 +365,7 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  retryDeadline = null,
 }) {
   let rotatedModels = models;
   let activeStickyModel = null;
@@ -606,8 +607,14 @@ export async function handleComboChat({
       // skipped immediately (fixes: combo falls through on transient 503)
       if (cooldownMs && cooldownMs > 0 && cooldownMs <= 5000 &&
           (result.status === 503 || result.status === 502 || result.status === 504)) {
-        log.info("COMBO", `Model ${modelStr} transient ${result.status}, waiting ${cooldownMs}ms before next`);
-        await new Promise(r => setTimeout(r, cooldownMs));
+        // Past the SSE commit deadline the wait would push the response into a
+        // committed 200, so advance to the next member immediately instead.
+        if (retryDeadline && Date.now() + cooldownMs >= retryDeadline) {
+          log.info("COMBO", `Model ${modelStr} transient ${result.status}, skipping ${cooldownMs}ms wait: past SSE commit budget`);
+        } else {
+          log.info("COMBO", `Model ${modelStr} transient ${result.status}, waiting ${cooldownMs}ms before next`);
+          await new Promise(r => setTimeout(r, cooldownMs));
+        }
       }
 
       // Fallback to next model

@@ -109,7 +109,10 @@ export function commitSse(resultPromise, { errorFormat, intervalMs, initialPing 
         let message = text;
         try { message = JSON.parse(text)?.error?.message || text; } catch { /* raw text */ }
         const status = response?.status || 502;
-        write(buildStreamErrorBytes(status >= 400 ? status : 502, message || `Upstream returned ${status}`, errorFormat));
+        // 9Router only emits retry-after as integer seconds; ignore HTTP-date values.
+        const retryHeader = response?.headers?.get("retry-after") || "";
+        const retryAfterSec = /^\d+$/.test(retryHeader.trim()) ? parseInt(retryHeader, 10) : 0;
+        write(buildStreamErrorBytes(status >= 400 ? status : 502, message || `Upstream returned ${status}`, errorFormat, { retryAfterSec }));
         return finish();
       }
 

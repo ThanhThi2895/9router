@@ -6,6 +6,7 @@
 - **Translator**: pass Gemini Google Search grounding through `/v1beta` `google_search` tools, Anthropic `web_search_*` server tools and OpenAI `web_search` tools on Gemini-family providers; sources return as `annotations` (`url_citation`), `grounding_metadata`, native `groundingMetadata` and Anthropic `server_tool_use` / `web_search_tool_result` blocks
 
 ## Fixes
+- **Antigravity**: a capacity 503 now returns a real `503` with `retry-after` (and, once a stream is already committed, an in-stream error carrying `status` and `retry_after`) instead of a long retry stall, a misleading error text from another model's lock, or a committed 200; retries and combo waits stop at the SSE commit window
 - **Chat**: render non-streaming replies in the client's format for Gemini-family, Claude and Ollama upstreams — `/v1/messages` with `stream:false` routed to Antigravity returned an OpenAI `chat.completion` (and lost its token counts); it now returns an Anthropic `message` including grounding blocks, and `/v1/responses` gets an `object:"response"` body
 - **Combo**: stream the last combo candidate straight through instead of peeking it for content first — its result was returned regardless, and the peek held reasoning-then-tool-call turns (Gemini agent steps) until the stream ended, so clients saw time-to-first-token equal to total latency
 

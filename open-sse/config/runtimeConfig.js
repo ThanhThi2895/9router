@@ -11,7 +11,8 @@ export const HTTP_STATUS = {
   SERVER_ERROR: 500,
   BAD_GATEWAY: 502,
   SERVICE_UNAVAILABLE: 503,
-  GATEWAY_TIMEOUT: 504
+  GATEWAY_TIMEOUT: 504,
+  OVERLOADED: 529
 };
 
 // Re-export error config (backward compat)
@@ -64,6 +65,11 @@ export const SSE_KEEPALIVE_INTERVAL_MS = envMs("SSE_KEEPALIVE_INTERVAL_MS", 15 *
 // resolves inside it keeps its real status/headers (429/502 retries, rate-limit headers);
 // only slower ones are committed and pinged. Env: SSE_KEEPALIVE_COMMIT_DELAY_MS.
 export const SSE_KEEPALIVE_COMMIT_DELAY_MS = envMs("SSE_KEEPALIVE_COMMIT_DELAY_MS", 10 * 1000);
+
+// Time reserved before the SSE commit for the last upstream round trip plus building the 503, so
+// executor retries (opted-in providers) stop sleeping past commit - COMMIT_DELAY - this margin.
+// A commit delay at or below the margin yields an already-past deadline: retries are only skipped.
+export const SSE_RETRY_DEADLINE_MARGIN_MS = 2000;
 
 // Combo empty-content failover: how long a 2xx stream may be held while waiting for its first
 // content-bearing frame before committing to that model (fail-open on expiry).

@@ -1,6 +1,6 @@
 import { getProviderConnections, validateApiKey, updateProviderConnection, getSettings, getProxyPools } from "@/lib/localDb";
 import { resolveConnectionProxyConfig, pickProxyPoolId } from "@/lib/network/connectionProxy";
-import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getEarliestModelLockUntil } from "open-sse/services/accountFallback.js";
+import { formatRetryAfter, checkFallbackError, isModelLockActive, buildModelLockUpdate, getModelLockUntil, getModelLockKey, getModelLockErrorKey, MODEL_LOCK_ERROR_PREFIX } from "open-sse/services/accountFallback.js";
 import { MAX_RATE_LIMIT_COOLDOWN_MS } from "open-sse/config/errorConfig.js";
 import { resolveProviderId, FREE_PROVIDERS } from "@/shared/constants/providers.js";
 import { getAntigravityQuotaCache, getAntigravityModelQuota } from "./antigravityQuota.js";
@@ -107,33 +107,44 @@ export async function getProviderCredentials(provider, excludeConnectionIds = nu
       const excluded = excludeSet.has(c.id);
       const locked = isModelLockActive(c, model);
       if (excluded || locked) {
-        const lockUntil = getEarliestModelLockUntil(c);
+        const lockUntil = getModelLockUntil(c, model);
         log.debug("AUTH", `  → ${c.id?.slice(0, 8)} | ${excluded ? "excluded" : ""} ${locked ? `modelLocked(${model}) until ${lockUntil}` : ""}`);
       }
     });
 
     if (availableConnections.length === 0) {
-      // Find earliest persistent lock or lazy Antigravity quota-cache reset for retry timing.
-      const lockedConns = connections.filter(c => isModelLockActive(c, model));
-      const expiries = lockedConns.map(c => getEarliestModelLockUntil(c)).filter(Boolean);
+      // Earliest model-scoped lock (or lazy Antigravity quota-cache reset) decides retry timing.
+      const candidates = connections
+        .filter(c => isModelLockActive(c, model))
+        .map(c => ({ conn: c, until: getModelLockUntil(c, model) }))
+        .filter(x => x.until);
       if (isAntigravity && model && antigravityQuotaCache) {
         connections.forEach((c) => {
           const connQuotas = antigravityQuotaCache.get(c.id);
           const quota = getAntigravityModelQuota(connQuotas, model) || connQuotas?.[model];
           const resetAt = quota?.resetAt;
-          if (resetAt && new Date(resetAt).getTime() > Date.now()) expiries.push(resetAt);
+          if (resetAt && new Date(resetAt).getTime() > Date.now()) candidates.push({ conn: null, until: resetAt });
         });
       }
-      const earliest = expiries.sort()[0] || null;
-      if (earliest) {
-        const earliestConn = lockedConns[0];
-        log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${earliestConn?.lastError?.slice(0, 50)}`);
+      candidates.sort((a, b) => new Date(a.until) - new Date(b.until));
+      const best = candidates[0];
+      if (best) {
+        const earliest = best.until;
+        // Error text comes from the lock of the requested model, never another model's lastError.
+        // Take the text from whichever lock decided the reported time.
+        const modelKey = getModelLockKey(model);
+        const modelLockTime = best.conn?.[modelKey] ? new Date(best.conn[modelKey]).getTime() : 0;
+        const allLockTime = best.conn?.[getModelLockKey(null)] ? new Date(best.conn[getModelLockKey(null)]).getTime() : 0;
+        const decidingModel = allLockTime > modelLockTime ? null : model;
+        const lockError = best.conn ? (best.conn[getModelLockErrorKey(decidingModel)] || best.conn[getModelLockErrorKey(model)] || best.conn[getModelLockErrorKey(null)]) : null;
+        const lastError = lockError?.message || `All accounts locked for ${model || "all models"}`;
+        log.warn("AUTH", `${provider} | all ${connections.length} accounts locked for ${model || "all"} (${formatRetryAfter(earliest)}) | lastError=${lastError.slice(0, 50)}`);
         return {
           allRateLimited: true,
           retryAfter: earliest,
           retryAfterHuman: formatRetryAfter(earliest),
-          lastError: earliestConn?.lastError || null,
-          lastErrorCode: earliestConn?.errorCode || null
+          lastError,
+          lastErrorCode: lockError?.status || null
         };
       }
       log.warn("AUTH", `${provider} | all ${connections.length} accounts unavailable`);
@@ -272,7 +283,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
   if (!shouldFallback) return { shouldFallback: false, cooldownMs: 0 };
 
   const reason = typeof errorText === "string" ? errorText.slice(0, 200) : "Provider error";
-  const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs);
+  const lockUpdate = buildModelLockUpdate(githubResetAtMs ? null : model, cooldownMs, { message: reason, status });
 
   await updateProviderConnection(connectionId, {
     ...lockUpdate,
@@ -283,7 +294,7 @@ export async function markAccountUnavailable(connectionId, status, errorText, pr
     backoffLevel: newBackoffLevel ?? backoffLevel
   });
 
-  const lockKey = Object.keys(lockUpdate)[0];
+  const lockKey = getModelLockKey(githubResetAtMs ? null : model);
   const connName = conn?.displayName || conn?.name || conn?.email || connectionId.slice(0, 8);
   log.warn("AUTH", `${connName} locked ${lockKey} for ${Math.round(cooldownMs / 1000)}s [${status}]`);
 
@@ -308,8 +319,9 @@ export async function clearAccountError(connectionId, currentConnection, model =
   const conn = currentConnection._connection || currentConnection;
   const now = Date.now();
   const allLockKeys = Object.keys(conn).filter(k => k.startsWith("modelLock_"));
+  const allErrorKeys = Object.keys(conn).filter(k => k.startsWith(MODEL_LOCK_ERROR_PREFIX));
 
-  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0) return;
+  if (!conn.testStatus && !conn.lastError && allLockKeys.length === 0 && allErrorKeys.length === 0) return;
 
   // Keys to clear: current model's lock + all expired locks
   const keysToClear = allLockKeys.filter(k => {
@@ -329,9 +341,12 @@ export async function clearAccountError(connectionId, currentConnection, model =
   });
 
   const clearObj = Object.fromEntries(keysToClear.map(k => [k, null]));
+  // Drop the error stored next to each cleared lock
+  for (const k of keysToClear) clearObj[`${MODEL_LOCK_ERROR_PREFIX}${k.slice("modelLock_".length)}`] = null;
 
   // Only reset error state if no active locks remain
   if (remainingActiveLocks.length === 0) {
+    for (const k of allErrorKeys) clearObj[k] = null;
     Object.assign(clearObj, {
       testStatus: "active",
       lastError: null,

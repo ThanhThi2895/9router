@@ -158,3 +158,43 @@ describe("withSseKeepalive", () => {
     expect(await withSseKeepalive(Promise.resolve(inner), { commitDelayMs: 10000 })).toBe(inner);
   });
 });
+
+describe("in-stream error status fields", () => {
+  const lateJson = (status, headers = {}) => new Response(
+    JSON.stringify({ error: { message: "No capacity available" } }),
+    { status, headers: { "Content-Type": "application/json", ...headers } }
+  );
+  const frameJson = (out) => JSON.parse(out.split("\n").find((l) => l.startsWith("data: {")).slice(6));
+
+  it("Claude format: 503 with retry-after becomes overloaded_error with status and retry_after", async () => {
+    const out = await drain(commitSse(Promise.resolve(lateJson(503, { "retry-after": "42" })), { intervalMs: 15000, errorFormat: FORMATS.CLAUDE }));
+    expect(out).toContain("event: error\n");
+    const { error } = frameJson(out);
+    expect(error).toMatchObject({ type: "overloaded_error", status: 503, retry_after: 42, message: "No capacity available", code: "service_unavailable" });
+  });
+
+  it("OpenAI format: keeps server_error and string code, adds status and retry_after, then [DONE]", async () => {
+    const out = await drain(commitSse(Promise.resolve(lateJson(503, { "retry-after": "42" })), { intervalMs: 15000, errorFormat: FORMATS.OPENAI }));
+    const { error } = frameJson(out);
+    expect(error).toMatchObject({ type: "server_error", code: "service_unavailable", status: 503, retry_after: 42 });
+    expect(out.trimEnd().endsWith("data: [DONE]")).toBe(true);
+  });
+
+  it("502 without retry-after: status only, Claude type unchanged", async () => {
+    const out = await drain(commitSse(Promise.resolve(lateJson(502)), { intervalMs: 15000, errorFormat: FORMATS.CLAUDE }));
+    const { error } = frameJson(out);
+    expect(error.status).toBe(502);
+    expect(error.type).toBe("server_error");
+    expect("retry_after" in error).toBe(false);
+  });
+
+  it("ignores an HTTP-date retry-after", async () => {
+    const out = await drain(commitSse(Promise.resolve(lateJson(503, { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" })), { intervalMs: 15000 }));
+    expect("retry_after" in frameJson(out).error).toBe(false);
+  });
+
+  it("OpenAI Responses format still emits a parseable data: error frame with the new fields", async () => {
+    const out = await drain(commitSse(Promise.resolve(lateJson(503, { "retry-after": "5" })), { intervalMs: 15000, errorFormat: FORMATS.OPENAI_RESPONSES }));
+    expect(frameJson(out).error).toMatchObject({ status: 503, retry_after: 5 });
+  });
+});

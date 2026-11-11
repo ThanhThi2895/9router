@@ -2,6 +2,7 @@ import { FORMATS } from "../translator/formats.js";
 import { fallbackToolCallId } from "../translator/concerns/toolCall.js";
 import { buildErrorBody } from "./error.js";
 import { SSE_DONE } from "./sseConstants.js";
+import { HTTP_STATUS } from "../config/runtimeConfig.js";
 
 const sharedEncoder = new TextEncoder();
 
@@ -183,8 +184,18 @@ export function formatSSE(data, sourceFormat) {
 //
 // NOTE: non-SSE client formats (Ollama NDJSON) get an SSE frame here — dead in
 // practice because detectFormatByEndpoint never resolves to OLLAMA.
-export function buildStreamErrorBytes(statusCode, message, clientFormat) {
+//
+// The error carries the numeric `status` and, when known, `retry_after` (seconds,
+// same unit as the HTTP retry-after header). Claude clients get Anthropic's
+// `overloaded_error` type for 503/529. `code` is never changed.
+export function buildStreamErrorBytes(statusCode, message, clientFormat, { retryAfterSec } = {}) {
   const { error } = buildErrorBody(statusCode, message);
+  error.status = statusCode;
+  if (retryAfterSec) error.retry_after = retryAfterSec;
+  if (clientFormat === FORMATS.CLAUDE
+    && (statusCode === HTTP_STATUS.SERVICE_UNAVAILABLE || statusCode === HTTP_STATUS.OVERLOADED)) {
+    error.type = "overloaded_error";
+  }
 
   const sse = clientFormat === FORMATS.CLAUDE
     ? formatSSE({ type: "error", error }, FORMATS.CLAUDE)

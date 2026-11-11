@@ -107,3 +107,38 @@ describe("combo fallback — request-scoped 4xx from a member", () => {
     expect(handleSingleModel).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("combo transient wait respects the SSE commit deadline", () => {
+  const transient = () => jsonResponse({ error: { message: "capacity" } }, 503);
+  const run = (retryDeadline) => {
+    const handleSingleModel = vi.fn(async (_b, m) =>
+      m === "provider-a/model-a" ? transient() : jsonResponse({ choices: [{ message: { content: "ok" } }] }));
+    const p = handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["provider-a/model-a", "provider-b/model-b"],
+      handleSingleModel, log: silentLog, comboName: "c", comboStrategy: "fallback", retryDeadline,
+    });
+    return { p, handleSingleModel };
+  };
+
+  it("skips the wait when it would end past the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { p, handleSingleModel } = run(Date.now() + 1000);
+      const res = await p;
+      expect(res.status).toBe(200);
+      expect(handleSingleModel).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("still waits when there is no deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const { p, handleSingleModel } = run(null);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(handleSingleModel).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(6000);
+      expect((await p).status).toBe(200);
+    } finally { vi.useRealTimers(); }
+  });
+});
